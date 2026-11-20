@@ -282,31 +282,21 @@ async function trace(request: Request, env: Env): Promise<Response> {
 // ---- device traffic ----
 
 async function device(request: Request, env: Env, id: string, kind: "connect" | "mcp"): Promise<Response> {
-  const row = await env.DB.prepare("SELECT key_hash, user_id FROM devices WHERE id = ?").bind(id).first<{ key_hash: string; user_id: string }>();
-  if (!row) return json(404, { error: "unknown device" });
   const phone = env.PHONE.get(env.PHONE.idFromName(id));
   if (kind === "connect") {
+    const row = await env.DB.prepare("SELECT key_hash, user_id FROM devices WHERE id = ?").bind(id).first<{ key_hash: string; user_id: string }>();
+    if (!row) return json(404, { error: "unknown device" });
     const key = request.headers.get("X-Device-Key") ?? "";
     if (!key || !timingSafeEqual(await sha256(key), row.key_hash)) return json(403, { error: "device key mismatch" });
     await env.DB.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?").bind(Date.now(), id).run();
-    return phone.fetch(new Request("https://relay/connect", request));
+    // The phone's object remembers whose phone this is, so a tool call never waits on the database.
+    const attach = new Request("https://relay/connect", request);
+    attach.headers.set("X-Relay-User", row.user_id);
+    return phone.fetch(attach);
   }
-
-  // Only tool calls are metered; the handshake, tools/list and pings are free.
-  const body = request.method === "POST" ? await request.text() : "";
-  const rpc = toolCall(body);
-  if (rpc) {
-    const usage = await usageOf(env, row.user_id);
-    if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(rpc.id, usage);
-  }
-  const answer = await phone.fetch(new Request("https://relay/mcp", { method: request.method, headers: request.headers, body: request.method === "POST" ? body : undefined }));
-  // Count what the phone accepted and answered; a rejected token (401) or a relay failure does not count.
-  if (rpc && answer.status === 200) {
-    await env.DB.prepare(
-      "INSERT INTO usage (user_id, month, calls) VALUES (?1, ?2, 1) ON CONFLICT(user_id, month) DO UPDATE SET calls = calls + 1",
-    ).bind(row.user_id, month()).run();
-  }
-  return answer;
+  // A tool call goes straight to the phone's object: it knows the owner and the allowance from the
+  // phone's own connection. An id that is not a connected phone is simply offline.
+  return phone.fetch(new Request("https://relay/mcp", { method: request.method, headers: request.headers, body: request.method === "POST" ? await request.text() : undefined }));
 }
 
 /** The JSON-RPC id of a tools/call request, or null for anything else. */
@@ -354,6 +344,8 @@ function quotaExceeded(id: unknown, usage: Usage): Response {
 }
 
 type Pending = { resolve: (r: Response) => void; timer: ReturnType<typeof setTimeout> };
+type CachedUsage = Usage & { at: number };
+const USAGE_REFRESH_MS = 5 * 60_000;
 
 /** One per device. Only the Worker reaches it, after checking the device exists (and its key on connect). */
 export class Phone implements DurableObject {
@@ -380,7 +372,27 @@ export class Phone implements DurableObject {
     for (const old of this.state.getWebSockets()) old.close(4000, "replaced by a newer connection");
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
+    // Set by the Worker after it checked the device key. A new connection also drops the cached
+    // allowance, so a plan change or another phone's use shows at the latest on the next reconnect.
+    const owner = request.headers.get("X-Relay-User");
+    if (owner) this.state.waitUntil(Promise.all([this.state.storage.put("owner", owner), this.state.storage.delete("usage")]));
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /**
+   * This account's use this month, kept beside the phone and refreshed from the database now and
+   * then. Several phones on one account each count their own calls between refreshes, so the
+   * allowance can overshoot by a few minutes of use: accepted, in exchange for not putting a
+   * database round trip in front of every tool call.
+   */
+  private async usage(owner: string): Promise<CachedUsage> {
+    const m = month();
+    const cached = await this.state.storage.get<CachedUsage>("usage");
+    if (cached && cached.month === m && Date.now() - cached.at < USAGE_REFRESH_MS) return cached;
+    const fresh = await usageOf(this.env, owner);
+    const next = { month: fresh.month, used: fresh.used, limit: fresh.limit, at: Date.now() };
+    await this.state.storage.put("usage", next);
+    return next;
   }
 
   /** An MCP request: send it to the phone and wait for its answer. */
@@ -389,6 +401,28 @@ export class Phone implements DurableObject {
     if (!socket) return json(503, { error: "the phone is offline", code: "phone_offline" });
     const body = request.method === "POST" ? await request.text() : "";
     if (body.length > MAX_BODY) return json(413, { error: "request too large" });
+    // Only tool calls are metered; the handshake, tools/list and pings are free.
+    const rpc = toolCall(body);
+    const owner = rpc ? await this.state.storage.get<string>("owner") : undefined;
+    if (rpc && owner) {
+      const usage = await this.usage(owner);
+      if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(rpc.id, usage);
+    }
+    const answer = await this.send(socket, request, body);
+    // Count what the phone accepted and answered; a rejected token (401) or a relay failure does not count.
+    if (rpc && owner && answer.status === 200) {
+      this.state.waitUntil((async () => {
+        const usage = await this.state.storage.get<CachedUsage>("usage");
+        if (usage) await this.state.storage.put("usage", { ...usage, used: usage.used + 1 });
+        await this.env.DB.prepare(
+          "INSERT INTO usage (user_id, month, calls) VALUES (?1, ?2, 1) ON CONFLICT(user_id, month) DO UPDATE SET calls = calls + 1",
+        ).bind(owner, month()).run();
+      })());
+    }
+    return answer;
+  }
+
+  private async send(socket: WebSocket, request: Request, body: string): Promise<Response> {
     if (this.pending.size >= MAX_PENDING) return json(429, { error: "too many requests are waiting on this phone", code: "phone_busy" });
 
     const id = crypto.randomUUID();
@@ -399,12 +433,20 @@ export class Phone implements DurableObject {
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(id, { resolve, timer });
     });
-    socket.send(JSON.stringify({
-      id,
-      method: request.method,
-      authorization: request.headers.get("Authorization") ?? "",
-      body,
-    }));
+    try {
+      socket.send(JSON.stringify({
+        id,
+        method: request.method,
+        authorization: request.headers.get("Authorization") ?? "",
+        body,
+      }));
+    } catch {
+      // The phone hung up and this is what is left of its socket: it is offline, not a relay fault.
+      const p = this.pending.get(id);
+      if (p) { clearTimeout(p.timer); this.pending.delete(id); }
+      try { socket.close(1011, "gone"); } catch { /* already closed */ }
+      return json(503, { error: "the phone is offline", code: "phone_offline" });
+    }
     return answer;
   }
 
@@ -424,7 +466,9 @@ export class Phone implements DurableObject {
     }));
   }
 
-  async webSocketClose(): Promise<void> {
+  async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+    // Finish the closing handshake, or the dead socket stays listed as this phone's connection.
+    try { ws.close(code === 1005 || code === 1006 ? 1000 : code, "bye"); } catch { /* already closed */ }
     this.failAll("the phone disconnected");
   }
 

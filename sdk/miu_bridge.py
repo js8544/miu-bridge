@@ -13,17 +13,18 @@ Elements are named by a ref from the latest screen ("e12") or by a selector that
 text=Send, text="Send" (exact), id=send_btn, role=button[name="Send"], optionally followed by " >> nth=N".
 """
 import base64
+import http.client
 import json
 import os
 import re
 import time
-import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
 __all__ = ["Phone", "PhoneError", "Screen", "Screenshot"]
 
-USER_AGENT = "miu-bridge-sdk/1.1 (python)"
+USER_AGENT = "miu-bridge-sdk/1.2 (python)"
 
 
 class PhoneError(Exception):
@@ -98,8 +99,19 @@ class Phone:
         self.timeout = timeout
         self.retries = retries
         self._id = 0
+        self._connection = None
+        self._path = "/"
+        self._proxy_headers = {}
 
     # --- transport ---
+
+    def close(self):
+        """Lets go of the connection. The next call opens a new one, so calling this is optional."""
+        if self._connection is not None:
+            try:
+                self._connection.close()
+            finally:
+                self._connection = None
 
     def call(self, tool, **arguments):
         """Runs one phone tool by name and returns (data, images). The methods below are thin wrappers over this.
@@ -119,26 +131,64 @@ class Phone:
                     raise
                 time.sleep(1 + 2 * attempt)
 
+    def _connect(self):
+        """Opens the one connection this object keeps to the phone or its relay, through the environment's proxy if any."""
+        target = urllib.parse.urlsplit(self.url)
+        secure = target.scheme == "https"
+        port = target.port or (443 if secure else 80)
+        self._path = (target.path or "/") + ("?" + target.query if target.query else "")
+        proxy = None if urllib.request.proxy_bypass(target.hostname) else urllib.request.getproxies().get(target.scheme)
+        if not proxy:
+            cls = http.client.HTTPSConnection if secure else http.client.HTTPConnection
+            return cls(target.hostname, port, timeout=self.timeout)
+        via = urllib.parse.urlsplit(proxy if "://" in proxy else "http://" + proxy)
+        auth = {}
+        if via.username:
+            pair = urllib.parse.unquote(via.username) + ":" + urllib.parse.unquote(via.password or "")
+            auth["Proxy-Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode()
+        cls = http.client.HTTPSConnection if (secure or via.scheme == "https") else http.client.HTTPConnection
+        connection = cls(via.hostname, via.port or (443 if via.scheme == "https" else 8080), timeout=self.timeout)
+        if secure:
+            connection.set_tunnel(target.hostname, port, headers=auth)
+        else:  # a plain-http target through a proxy is asked for by its full address
+            self._path, self._proxy_headers = self.url, auth
+        return connection
+
     def _send(self, body):
-        request = urllib.request.Request(self.url, data=body, headers={
+        headers = {
             "Content-Type": "application/json", "Accept": "application/json", "Authorization": "Bearer " + self.token,
             # Named on purpose: the relay's CDN refuses Python's default "Python-urllib" signature with a 403.
             "User-Agent": USER_AGENT,
-        })
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                reply = json.load(response)
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:300]
-            hint = {401: "the token was rejected", 503: "the phone is offline", 504: "the phone did not answer in time"}.get(e.code, "")
-            code = {401: "unauthorized", 502: "unreachable", 503: "phone_offline", 504: "relay_timeout"}.get(e.code, "http_error")
-            if e.code == 403 and "1010" in detail:
+        }
+        # One connection for the life of this object: opening a new one costs several round trips each call.
+        for fresh in (False, True):
+            reused = self._connection is not None and not fresh
+            try:
+                if self._connection is None:
+                    self._proxy_headers = {}
+                    self._connection = self._connect()
+                self._connection.request("POST", self._path, body=body, headers={**headers, **self._proxy_headers})
+                response = self._connection.getresponse()
+                status, raw = response.status, response.read()
+                break
+            except (http.client.HTTPException, OSError) as e:
+                self.close()
+                # A kept connection the other side has since closed: say it once more on a new one. The request id
+                # makes the repeat safe. Anything else is a real failure to reach the phone.
+                if reused and isinstance(e, (http.client.RemoteDisconnected, http.client.CannotSendRequest, ConnectionError)):
+                    continue
+                raise PhoneError(f"cannot reach the phone: {e}", "unreachable") from None
+        if status != 200:
+            detail = raw.decode("utf-8", "replace")[:300]
+            hint = {401: "the token was rejected", 503: "the phone is offline", 504: "the phone did not answer in time"}.get(status, "")
+            code = {401: "unauthorized", 502: "unreachable", 503: "phone_offline", 504: "relay_timeout"}.get(status, "http_error")
+            if status == 403 and "1010" in detail:
                 hint = "the relay's CDN refused this client's signature; send a User-Agent header that names your client"
-            raise PhoneError(f"HTTP {e.code} {hint}: {detail}".strip(), code) from None
-        except urllib.error.URLError as e:
-            raise PhoneError(f"cannot reach the phone: {e.reason}", "unreachable") from None
-        except OSError as e:  # a read that timed out or a connection that dropped mid-answer
-            raise PhoneError(f"no answer from the phone: {e}", "unreachable") from None
+            raise PhoneError(f"HTTP {status} {hint}: {detail}".strip(), code)
+        try:
+            reply = json.loads(raw)
+        except ValueError:
+            raise PhoneError("the answer was not JSON: " + raw.decode("utf-8", "replace")[:200], "unreachable") from None
         if "error" in reply:
             raise PhoneError(str(reply["error"].get("message", reply["error"])), "bad_request")
         result = reply.get("result", {})
