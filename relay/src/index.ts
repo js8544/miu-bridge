@@ -1,0 +1,487 @@
+/**
+ * Miu Bridge relay.
+ *
+ * Accounts live in D1. The phone app signs in, registers itself as a device and gets a device id and
+ * key; it then keeps one outbound WebSocket to that device's Durable Object. MCP clients (Muse, Claude
+ * Code, …) POST to the device's /mcp URL and the object forwards each request over the socket and
+ * returns the phone's answer.
+ *
+ * The relay is a pipe for MCP traffic: it keeps no history and does not check the MCP bearer token —
+ * the phone does. It checks that the socket for a device id is opened with that device's key.
+ *
+ * Remote use is metered: each tools/call the phone answers counts once against the account's monthly
+ * allowance (PLAN_LIMITS), whatever the call does on the phone; a phone_script with many steps is one
+ * call. Agents on the phone's own network talk to it directly and are not metered. A call that the
+ * phone rejects (a wrong token) does not count, so knowing a device id is not enough to use up an
+ * account's allowance.
+ *
+ *   POST   /api/auth/send         {email}                      emails a 6-digit code
+ *   POST   /api/auth/verify       {email, code}                -> {token, email} (creates the account on first sign-in)
+ *   POST   /api/logout            (session)
+ *   GET    /api/me                (session)                    -> {email, devices: [...], usage: {month, used, limit}}
+ *   POST   /api/devices           (session) {name, deviceId?}  -> {deviceId, deviceKey, mcpUrl}
+ *   DELETE /api/devices/<id>      (session)
+ *   POST   /api/trace             {install, app, sdk, brand, events: [...]}  opt-in usage metadata (no account)
+ *   DELETE /api/trace/<install>   forget everything sent under that install id
+ *   GET    /sdk/                  the client SDK and its guide (miu_bridge.py, miu-bridge.mjs)
+ *   wss    /d/<deviceId>/connect  phone, header `X-Device-Key`
+ *   https  /d/<deviceId>/mcp      MCP clients, header `Authorization: Bearer <token>` (checked by the phone)
+ */
+
+// @ts-expect-error imported as text (see wrangler.toml rules)
+import sdkPython from "../../sdk/miu_bridge.py";
+// @ts-expect-error imported as text
+import sdkJs from "../../sdk/miu-bridge.mjs";
+// @ts-expect-error imported as text
+import sdkReadme from "../../sdk/README.md";
+
+/** The client SDK, for an agent to fetch into its own sandbox. Public: it holds no secrets. */
+const SDK: Record<string, [string, string]> = {
+  "/sdk": [sdkReadme, "text/markdown; charset=utf-8"],
+  "/sdk/": [sdkReadme, "text/markdown; charset=utf-8"],
+  "/sdk/README.md": [sdkReadme, "text/markdown; charset=utf-8"],
+  "/sdk/miu_bridge.py": [sdkPython, "text/x-python; charset=utf-8"],
+  "/sdk/miu-bridge.mjs": [sdkJs, "text/javascript; charset=utf-8"],
+};
+
+export interface Env {
+  PHONE: DurableObjectNamespace;
+  DB: D1Database;
+  EMAIL: SendEmail;
+  SEND_LIMIT: RateLimit;
+  TRACE_LIMIT: RateLimit;
+  MAIL_FROM: string;
+}
+
+const HOSTED_ORIGIN = "https://phone.jinshang.ai";
+const MAX_PENDING = 32; // requests waiting on one phone; it runs one at a time
+const DEVICE_ID = /^[A-Za-z0-9_-]{22,64}$/;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const REQUEST_TIMEOUT_MS = 10 * 60_000; // tool calls can wait for the owner (handoff)
+const MAX_BODY = 1 << 20;
+const SESSION_TTL_MS = 90 * 24 * 3600_000;
+const MAX_DEVICES = 10;
+const CODE_TTL_MS = 10 * 60_000;
+const RESEND_COOLDOWN_MS = 60_000;
+const MAX_SENDS_PER_HOUR = 5;
+const MAX_CODE_ATTEMPTS = 5;
+/** Remote tool calls per calendar month (UTC), by plan; null is unlimited. */
+const MAX_TRACE_EVENTS = 200; // per request
+const INSTALL_ID = /^[A-Za-z0-9-]{16,64}$/;
+const SELECTORS = new Set(["ref", "text", "id", "role", "xy"]);
+const PLAN_LIMITS: Record<string, number | null> = { free: 1000, paid: null };
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    try {
+      if (url.pathname.startsWith("/api/")) return await api(request, env, url);
+      const m = url.pathname.match(/^\/d\/([^/]+)\/(connect|mcp)$/);
+      if (m && DEVICE_ID.test(m[1])) return await device(request, env, m[1], m[2] as "connect" | "mcp");
+      const file = SDK[url.pathname];
+      // The SDK guide names the hosted relay; a self-hosted relay serves it with its own address.
+      if (file && request.method === "GET") return new Response(file[0].replaceAll(HOSTED_ORIGIN, url.origin), { headers: { "Content-Type": file[1], "Cache-Control": "public, max-age=300" } });
+      if (url.pathname === "/") return new Response("Miu Bridge relay\n");
+      return json(404, { error: "not found" });
+    } catch (e) {
+      if (e instanceof HttpError) return json(e.status, { error: e.message, code: e.code });
+      console.error(e);
+      return json(500, { error: "Internal error", code: "internal" });
+    }
+  },
+};
+
+// ---- accounts ----
+
+async function api(request: Request, env: Env, url: URL): Promise<Response> {
+  const route = `${request.method} ${url.pathname}`;
+  switch (route) {
+    case "POST /api/auth/send": {
+      const email = emailOf(await readJson(request));
+      const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+      if (!(await env.SEND_LIMIT.limit({ key: ip })).success) throw new HttpError(429, "rate_limited", "Too many requests");
+      await sendCode(env, email);
+      return json(200, {});
+    }
+    case "POST /api/auth/verify": {
+      const body = await readJson(request);
+      const email = emailOf(body);
+      const code = String(body.code ?? "").replace(/\D/g, "");
+      const row = await env.DB.prepare("SELECT code_hash, expires_at, attempts FROM email_codes WHERE email = ?")
+        .bind(email).first<{ code_hash: string; expires_at: number; attempts: number }>();
+      if (!row || row.expires_at < Date.now() || row.attempts >= MAX_CODE_ATTEMPTS) {
+        throw new HttpError(401, "code_expired", "The code has expired");
+      }
+      if (code.length !== 6 || !timingSafeEqual(await sha256(`${email}:${code}`), row.code_hash)) {
+        await env.DB.prepare("UPDATE email_codes SET attempts = attempts + 1 WHERE email = ?").bind(email).run();
+        throw new HttpError(401, "code_wrong", "Wrong code");
+      }
+      // The code is not deleted on success: it stays good until it expires. A phone on a slow network can
+      // lose this answer after the work is done; it must be able to send the same code again and get in.
+      // First sign-in creates the account. password_* are unused since sign-in moved to email codes.
+      await env.DB.prepare(
+        "INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, '', '', ?) ON CONFLICT(email) DO NOTHING",
+      ).bind(crypto.randomUUID(), email, Date.now()).run();
+      const user = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first<{ id: string }>();
+      return json(200, { token: await newSession(env, user!.id), email });
+    }
+    case "POST /api/logout": {
+      const token = bearer(request);
+      if (token) await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(await sha256(token)).run();
+      return json(200, {});
+    }
+    case "GET /api/me": {
+      const user = await authed(request, env);
+      const { results } = await env.DB.prepare(
+        "SELECT id, name, created_at, last_seen_at FROM devices WHERE user_id = ? ORDER BY created_at",
+      ).bind(user.id).all();
+      return json(200, { email: user.email, devices: results, usage: await usageOf(env, user.id) });
+    }
+    case "POST /api/devices": {
+      const user = await authed(request, env);
+      const body = await readJson(request);
+      const name = String(body.name ?? "").trim().slice(0, 60) || "Phone";
+      const key = randomB64(32);
+      const keyHash = await sha256(key);
+      // Signing in again on the same phone keeps its id, so the MCP URL given to agents stays the same.
+      const wanted = typeof body.deviceId === "string" && DEVICE_ID.test(body.deviceId) ? body.deviceId : null;
+      if (wanted) {
+        const res = await env.DB.prepare("UPDATE devices SET key_hash = ?, name = ? WHERE id = ? AND user_id = ?")
+          .bind(keyHash, name, wanted, user.id).run();
+        if (res.meta.changes) {
+          await kick(env, wanted);
+          return json(200, { deviceId: wanted, deviceKey: key, mcpUrl: mcpUrl(request, wanted) });
+        }
+      }
+      const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM devices WHERE user_id = ?").bind(user.id).first<number>("n");
+      if ((count ?? 0) >= MAX_DEVICES) throw new HttpError(409, "device_limit", `An account can have at most ${MAX_DEVICES} phones`);
+      const id = randomB64(18);
+      await env.DB.prepare("INSERT INTO devices (id, user_id, name, key_hash, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(id, user.id, name, keyHash, Date.now()).run();
+      return json(200, { deviceId: id, deviceKey: key, mcpUrl: mcpUrl(request, id) });
+    }
+  }
+  if (route === "POST /api/trace") return await trace(request, env);
+  const forget = url.pathname.match(/^\/api\/trace\/([^/]+)$/);
+  if (forget && request.method === "DELETE") {
+    if (!INSTALL_ID.test(forget[1])) throw new HttpError(400, "bad_request", "Bad request");
+    await env.DB.prepare("DELETE FROM trace_events WHERE install_id = ?").bind(forget[1]).run();
+    return json(200, {});
+  }
+  const del = url.pathname.match(/^\/api\/devices\/([^/]+)$/);
+  if (request.method === "DELETE" && del) {
+    const user = await authed(request, env);
+    const res = await env.DB.prepare("DELETE FROM devices WHERE id = ? AND user_id = ?").bind(del[1], user.id).run();
+    if (!res.meta.changes) throw new HttpError(404, "not_found", "No such phone");
+    await kick(env, del[1]);
+    return json(200, {});
+  }
+  throw new HttpError(404, "not_found", "Not found");
+}
+
+function emailOf(body: Record<string, unknown>): string {
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!EMAIL.test(email) || email.length > 200) throw new HttpError(400, "bad_email", "That email is not valid");
+  return email;
+}
+
+/** Emails a fresh 6-digit code, replacing any earlier one. Limited per email: a cooldown and an hourly cap. */
+async function sendCode(env: Env, email: string): Promise<void> {
+  const now = Date.now();
+  const prev = await env.DB.prepare("SELECT sent_at, window_start, window_sends FROM email_codes WHERE email = ?")
+    .bind(email).first<{ sent_at: number; window_start: number; window_sends: number }>();
+  if (prev && now - prev.sent_at < RESEND_COOLDOWN_MS) throw new HttpError(429, "code_recent", "A code was just sent");
+  const fresh = !prev || now - prev.window_start > 3600_000;
+  if (!fresh && prev!.window_sends >= MAX_SENDS_PER_HOUR) throw new HttpError(429, "too_many_codes", "Too many codes for this email");
+
+  const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
+  await env.DB.prepare(
+    `INSERT INTO email_codes (email, code_hash, expires_at, attempts, sent_at, window_start, window_sends)
+     VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)
+     ON CONFLICT(email) DO UPDATE SET code_hash = ?2, expires_at = ?3, attempts = 0, sent_at = ?4, window_start = ?5, window_sends = ?6`,
+  ).bind(email, await sha256(`${email}:${code}`), now + CODE_TTL_MS, now, fresh ? now : prev!.window_start, fresh ? 1 : prev!.window_sends + 1).run();
+
+  try {
+    await env.EMAIL.send({
+      from: { email: env.MAIL_FROM, name: "Miu Bridge" },
+      to: email,
+      subject: `${code} is your Miu Bridge code · 验证码`,
+      text: `Your Miu Bridge sign-in code is ${code}. It is valid for 10 minutes.\nIf you did not ask for it, ignore this email.\n\n你的 Miu Bridge 登录验证码是 ${code}，10 分钟内有效。\n如果不是你本人在登录，请忽略这封邮件。`,
+    });
+  } catch (e) {
+    console.error("send code failed", (e as { code?: string }).code);
+    await env.DB.prepare("DELETE FROM email_codes WHERE email = ?").bind(email).run();
+    throw new HttpError(502, "send_failed", "The email could not be sent");
+  }
+}
+
+async function newSession(env: Env, userId: string): Promise<string> {
+  const token = "pbs_" + randomB64(32);
+  const now = Date.now();
+  await env.DB.prepare("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+    .bind(await sha256(token), userId, now, now + SESSION_TTL_MS).run();
+  return token;
+}
+
+async function authed(request: Request, env: Env): Promise<{ id: string; email: string }> {
+  const token = bearer(request);
+  if (!token) throw new HttpError(401, "login_required", "Sign in first");
+  const user = await env.DB.prepare(
+    "SELECT u.id, u.email FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?",
+  ).bind(await sha256(token), Date.now()).first<{ id: string; email: string }>();
+  if (!user) throw new HttpError(401, "session_expired", "The sign-in has expired");
+  return user;
+}
+
+function mcpUrl(request: Request, id: string): string {
+  return `${new URL(request.url).origin}/d/${id}/mcp`;
+}
+
+/** Drop the device's current socket, e.g. after its key changed or it was removed. */
+async function kick(env: Env, id: string): Promise<void> {
+  await env.PHONE.get(env.PHONE.idFromName(id)).fetch("https://relay/kick", { method: "POST" });
+}
+
+// ---- experience improvement program ----
+
+/**
+ * Stores a batch of opt-in usage events. Anyone can post here (it carries no account), so every
+ * field is checked against a narrow shape and anything else is dropped: the table can only ever hold
+ * tool names, app package names, codes and numbers.
+ */
+async function trace(request: Request, env: Env): Promise<Response> {
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  if (!(await env.TRACE_LIMIT.limit({ key: ip })).success) throw new HttpError(429, "rate_limited", "Too many requests");
+  const body = await readJson(request);
+  const install = String(body.install ?? "");
+  const app = String(body.app ?? "");
+  const sdk = Number(body.sdk);
+  const brand = String(body.brand ?? "");
+  if (!INSTALL_ID.test(install) || !/^[0-9A-Za-z.+-]{1,32}$/.test(app) || !Number.isInteger(sdk) || sdk < 1 || sdk > 200 ||
+      !/^[0-9A-Za-z ._-]{1,40}$/.test(brand) || !Array.isArray(body.events)) {
+    throw new HttpError(400, "bad_request", "Bad request");
+  }
+  const now = Date.now();
+  const rows = (body.events as unknown[]).slice(0, MAX_TRACE_EVENTS).flatMap((v) => {
+    const e = (v ?? {}) as Record<string, unknown>;
+    const tool = String(e.tool ?? "");
+    const at = Number(e.t), ms = Number(e.ms);
+    if (!/^phone_[a-z_]{1,30}$/.test(tool) || !Number.isInteger(at) || !Number.isInteger(ms) || ms < 0 || ms > 3_600_000) return [];
+    const pkg = typeof e.pkg === "string" && /^[A-Za-z0-9._]{1,150}$/.test(e.pkg) ? e.pkg : null;
+    const code = typeof e.code === "string" && /^[a-z_]{1,40}$/.test(e.code) ? e.code : null;
+    const sel = typeof e.sel === "string" && SELECTORS.has(e.sel) ? e.sel : null;
+    const lines = Number.isInteger(e.lines) && (e.lines as number) >= 0 && (e.lines as number) < 100_000 ? e.lines as number : null;
+    return [env.DB.prepare(
+      "INSERT INTO trace_events (install_id, at, tool, pkg, ok, code, ms, sel, lines, app, sdk, brand, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(install, at, tool, pkg, e.ok === true ? 1 : 0, code, ms, sel, lines, app, sdk, brand, now)];
+  });
+  if (rows.length) await env.DB.batch(rows);
+  return json(200, { stored: rows.length });
+}
+
+// ---- device traffic ----
+
+async function device(request: Request, env: Env, id: string, kind: "connect" | "mcp"): Promise<Response> {
+  const row = await env.DB.prepare("SELECT key_hash, user_id FROM devices WHERE id = ?").bind(id).first<{ key_hash: string; user_id: string }>();
+  if (!row) return json(404, { error: "unknown device" });
+  const phone = env.PHONE.get(env.PHONE.idFromName(id));
+  if (kind === "connect") {
+    const key = request.headers.get("X-Device-Key") ?? "";
+    if (!key || !timingSafeEqual(await sha256(key), row.key_hash)) return json(403, { error: "device key mismatch" });
+    await env.DB.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?").bind(Date.now(), id).run();
+    return phone.fetch(new Request("https://relay/connect", request));
+  }
+
+  // Only tool calls are metered; the handshake, tools/list and pings are free.
+  const body = request.method === "POST" ? await request.text() : "";
+  const rpc = toolCall(body);
+  if (rpc) {
+    const usage = await usageOf(env, row.user_id);
+    if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(rpc.id, usage);
+  }
+  const answer = await phone.fetch(new Request("https://relay/mcp", { method: request.method, headers: request.headers, body: request.method === "POST" ? body : undefined }));
+  // Count what the phone accepted and answered; a rejected token (401) or a relay failure does not count.
+  if (rpc && answer.status === 200) {
+    await env.DB.prepare(
+      "INSERT INTO usage (user_id, month, calls) VALUES (?1, ?2, 1) ON CONFLICT(user_id, month) DO UPDATE SET calls = calls + 1",
+    ).bind(row.user_id, month()).run();
+  }
+  return answer;
+}
+
+/** The JSON-RPC id of a tools/call request, or null for anything else. */
+function toolCall(body: string): { id: unknown } | null {
+  if (!body.includes("tools/call")) return null;
+  try {
+    const v = JSON.parse(body);
+    return v && typeof v === "object" && v.method === "tools/call" ? { id: v.id ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
+type Usage = { month: string; used: number; limit: number | null };
+
+async function usageOf(env: Env, userId: string): Promise<Usage> {
+  const m = month();
+  const row = await env.DB.prepare(
+    "SELECT u.plan AS plan, COALESCE(g.calls, 0) AS used FROM users u LEFT JOIN usage g ON g.user_id = u.id AND g.month = ?2 WHERE u.id = ?1",
+  ).bind(userId, m).first<{ plan: string; used: number }>();
+  const plan = row?.plan ?? "free";
+  return { month: m, used: row?.used ?? 0, limit: plan in PLAN_LIMITS ? PLAN_LIMITS[plan] : PLAN_LIMITS.free };
+}
+
+function month(now = new Date()): string {
+  return now.toISOString().slice(0, 7);
+}
+
+/**
+ * Over the allowance: answered as a failed tool call, in the same shape the phone uses for its own
+ * errors, so a model reads the reason and an SDK gets the code, instead of a transport error.
+ */
+function quotaExceeded(id: unknown, usage: Usage): Response {
+  const message = `This account has used its ${usage.limit} remote tool calls for ${usage.month}. ` +
+    "Agents on the phone's own Wi-Fi are not limited; remote use continues next month or after the owner upgrades.";
+  return json(200, {
+    jsonrpc: "2.0",
+    id,
+    result: {
+      isError: true,
+      content: [{ type: "text", text: `${message} [code: quota_exceeded]` }],
+      structuredContent: { code: "quota_exceeded", message, used: usage.used, limit: usage.limit, month: usage.month },
+    },
+  });
+}
+
+type Pending = { resolve: (r: Response) => void; timer: ReturnType<typeof setTimeout> };
+
+/** One per device. Only the Worker reaches it, after checking the device exists (and its key on connect). */
+export class Phone implements DurableObject {
+  private pending = new Map<string, Pending>();
+
+  constructor(private state: DurableObjectState, private env: Env) {
+    // Answer the phone's keepalive pings without waking the object.
+    state.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    switch (new URL(request.url).pathname) {
+      case "/connect": return this.attach(request);
+      case "/mcp": return this.forward(request);
+      case "/kick":
+        for (const ws of this.state.getWebSockets()) ws.close(4001, "device key changed");
+        return new Response(null, { status: 204 });
+    }
+    return new Response("not found", { status: 404 });
+  }
+
+  private attach(request: Request): Response {
+    if (request.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
+    for (const old of this.state.getWebSockets()) old.close(4000, "replaced by a newer connection");
+    const pair = new WebSocketPair();
+    this.state.acceptWebSocket(pair[1]);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /** An MCP request: send it to the phone and wait for its answer. */
+  private async forward(request: Request): Promise<Response> {
+    const socket = this.state.getWebSockets()[0];
+    if (!socket) return json(503, { error: "the phone is offline", code: "phone_offline" });
+    const body = request.method === "POST" ? await request.text() : "";
+    if (body.length > MAX_BODY) return json(413, { error: "request too large" });
+    if (this.pending.size >= MAX_PENDING) return json(429, { error: "too many requests are waiting on this phone", code: "phone_busy" });
+
+    const id = crypto.randomUUID();
+    const answer = new Promise<Response>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve(json(504, { error: "the phone did not answer in time; the action may or may not have happened", code: "relay_timeout" }));
+      }, REQUEST_TIMEOUT_MS);
+      this.pending.set(id, { resolve, timer });
+    });
+    socket.send(JSON.stringify({
+      id,
+      method: request.method,
+      authorization: request.headers.get("Authorization") ?? "",
+      body,
+    }));
+    return answer;
+  }
+
+  /** A reply from the phone: `{id, status, body}`. */
+  async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message !== "string") return;
+    let reply: { id?: string; status?: number; body?: string };
+    try { reply = JSON.parse(message); } catch { return; }
+    const p = reply.id ? this.pending.get(reply.id) : undefined;
+    if (!p) return;
+    this.pending.delete(reply.id!);
+    clearTimeout(p.timer);
+    const status = reply.status ?? 502;
+    p.resolve(new Response(status === 202 || status === 204 || !reply.body ? null : reply.body, {
+      status,
+      headers: reply.body ? { "Content-Type": "application/json" } : {},
+    }));
+  }
+
+  async webSocketClose(): Promise<void> {
+    this.failAll("the phone disconnected");
+  }
+
+  async webSocketError(): Promise<void> {
+    this.failAll("the phone connection failed");
+  }
+
+  private failAll(reason: string) {
+    if (this.state.getWebSockets().length > 0) return; // a newer socket is still attached
+    for (const [id, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.resolve(json(502, { error: `${reason}; the action may or may not have happened` }));
+      this.pending.delete(id);
+    }
+  }
+}
+
+// ---- helpers ----
+
+/** [code] is stable and what the app translates; [message] is for people reading raw responses. */
+class HttpError extends Error {
+  constructor(public status: number, public code: string, message: string) { super(message); }
+}
+
+async function readJson(request: Request): Promise<Record<string, unknown>> {
+  try {
+    const v = await request.json();
+    if (v && typeof v === "object") return v as Record<string, unknown>;
+  } catch { /* fall through */ }
+  throw new HttpError(400, "bad_request", "Bad request");
+}
+
+function bearer(request: Request): string | null {
+  const h = request.headers.get("Authorization") ?? "";
+  return h.startsWith("Bearer ") ? h.slice(7).trim() || null : null;
+}
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8" } });
+}
+
+function hex(buf: ArrayBuffer | Uint8Array): string {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function randomB64(bytes: number): string {
+  const s = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(bytes))));
+  return s.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function sha256(s: string): Promise<string> {
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}

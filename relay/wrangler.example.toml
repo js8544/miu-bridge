@@ -1,0 +1,42 @@
+# Copy to wrangler.toml and fill in your own domain, sender address and database id.
+name = "miu-bridge-relay"
+main = "src/index.ts"
+compatibility_date = "2025-10-01"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "relay.example.com", custom_domain = true }]
+# The SDK files in ../sdk are served as they are.
+rules = [{ type = "Text", globs = ["**/sdk/*"], fallthrough = false }]
+
+[vars]
+MAIL_FROM = "noreply@example.com"
+
+[[send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["noreply@example.com"]
+
+# Per-IP limit on sending sign-in codes.
+[[ratelimits]]
+name = "SEND_LIMIT"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+# Per-IP limit on usage reports from the experience improvement program.
+[[ratelimits]]
+name = "TRACE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 30, period = 60 }
+
+[[durable_objects.bindings]]
+name = "PHONE"
+class_name = "Phone"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Phone"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "miu-bridge"
+database_id = "<id printed by: npx wrangler d1 create miu-bridge>"
+migrations_dir = "migrations"
