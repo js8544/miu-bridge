@@ -292,11 +292,22 @@ async function device(request: Request, env: Env, id: string, kind: "connect" | 
     // The phone's object remembers whose phone this is, so a tool call never waits on the database.
     const attach = new Request("https://relay/connect", request);
     attach.headers.set("X-Relay-User", row.user_id);
+    attach.headers.set("X-Relay-Colo", String((request as { cf?: { colo?: string } }).cf?.colo ?? ""));
     return phone.fetch(attach);
   }
   // A tool call goes straight to the phone's object: it knows the owner and the allowance from the
   // phone's own connection. An id that is not a connected phone is simply offline.
-  return phone.fetch(new Request("https://relay/mcp", { method: request.method, headers: request.headers, body: request.method === "POST" ? await request.text() : undefined }));
+  const start = Date.now();
+  const answer = await phone.fetch(new Request("https://relay/mcp", { method: request.method, headers: request.headers, body: request.method === "POST" ? await request.text() : undefined }));
+  // Where the time went, for whoever is tracing a slow call: this entry point, the hop to the phone's
+  // object, that object's own work, the link to the phone, and the phone. Durations and places only.
+  const inside = answer.headers.get("Server-Timing");
+  const traced = new Response(answer.body, answer);
+  const colo = String((request as { cf?: { colo?: string } }).cf?.colo ?? "");
+  const hop = Math.max(0, Date.now() - start - Number(answer.headers.get("X-Relay-Ms") ?? 0));
+  traced.headers.delete("X-Relay-Ms");
+  traced.headers.set("Server-Timing", [`edge;desc="${colo}";dur=${hop}`, inside].filter(Boolean).join(", "));
+  return traced;
 }
 
 /** The JSON-RPC id of a tools/call request, or null for anything else. */
@@ -376,6 +387,8 @@ export class Phone implements DurableObject {
     // allowance, so a plan change or another phone's use shows at the latest on the next reconnect.
     const owner = request.headers.get("X-Relay-User");
     if (owner) this.state.waitUntil(Promise.all([this.state.storage.put("owner", owner), this.state.storage.delete("usage")]));
+    // Where the phone came in: part of the trace of a slow call.
+    this.state.waitUntil(this.state.storage.put("phone_colo", request.headers.get("X-Relay-Colo") ?? ""));
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -397,6 +410,7 @@ export class Phone implements DurableObject {
 
   /** An MCP request: send it to the phone and wait for its answer. */
   private async forward(request: Request): Promise<Response> {
+    const received = Date.now();
     const socket = this.state.getWebSockets()[0];
     if (!socket) return json(503, { error: "the phone is offline", code: "phone_offline" });
     const body = request.method === "POST" ? await request.text() : "";
@@ -408,7 +422,18 @@ export class Phone implements DurableObject {
       const usage = await this.usage(owner);
       if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(rpc.id, usage);
     }
-    const answer = await this.send(socket, request, body);
+    const ready = Date.now();
+    const sent = await this.send(socket, request, body);
+    const phoneMs = Number(sent.headers.get("X-Phone-Ms") ?? 0);
+    const answer = new Response(sent.body, sent);
+    answer.headers.delete("X-Phone-Ms");
+    const done = Date.now();
+    answer.headers.set("X-Relay-Ms", String(done - received));
+    answer.headers.set("Server-Timing", [
+      `relay;dur=${ready - received}`,
+      `link;desc="${(await this.state.storage.get<string>("phone_colo")) ?? ""}";dur=${Math.max(0, done - ready - phoneMs)}`,
+      `phone;dur=${phoneMs}`,
+    ].join(", "));
     // Count what the phone accepted and answered; a rejected token (401) or a relay failure does not count.
     if (rpc && owner && answer.status === 200) {
       this.state.waitUntil((async () => {
@@ -453,7 +478,7 @@ export class Phone implements DurableObject {
   /** A reply from the phone: `{id, status, body}`. */
   async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== "string") return;
-    let reply: { id?: string; status?: number; body?: string };
+    let reply: { id?: string; status?: number; body?: string; ms?: number };
     try { reply = JSON.parse(message); } catch { return; }
     const p = reply.id ? this.pending.get(reply.id) : undefined;
     if (!p) return;
@@ -462,7 +487,7 @@ export class Phone implements DurableObject {
     const status = reply.status ?? 502;
     p.resolve(new Response(status === 202 || status === 204 || !reply.body ? null : reply.body, {
       status,
-      headers: reply.body ? { "Content-Type": "application/json" } : {},
+      headers: { ...(reply.body ? { "Content-Type": "application/json" } : {}), "X-Phone-Ms": String(Number(reply.ms) || 0) },
     }));
   }
 

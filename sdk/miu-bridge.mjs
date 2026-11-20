@@ -83,11 +83,12 @@ export class Phone {
 
   async #send(body) {
     let response;
+    const started = Date.now();
     try {
       response = await fetch(this.url, {
         method: "POST",
         // The User-Agent is named on purpose: the relay's CDN refuses some default client signatures with a 403.
-        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${this.token}`, "User-Agent": "miu-bridge-sdk/1.1 (js)" },
+        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${this.token}`, "User-Agent": "miu-bridge-sdk/1.2 (js)" },
         body,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
@@ -102,8 +103,24 @@ export class Phone {
       throw new PhoneError(`HTTP ${response.status} ${hint}: ${detail}`.trim(), code);
     }
     let reply;
+    const header = response.headers.get("Server-Timing");
     try { reply = await response.json(); } catch (e) { throw new PhoneError(`no answer from the phone: ${e.message}`, "unreachable"); }
     if (reply.error) throw new PhoneError(String(reply.error.message ?? JSON.stringify(reply.error)), "bad_request");
+    // Where this call's time went, in milliseconds: total as seen from here, each part the relay and the phone
+    // reported (edge, relay, link, phone), network for what is left over, and where Cloudflare handled it.
+    const timing = { total_ms: Date.now() - started };
+    const where = {};
+    for (const part of (header ?? "").split(",")) {
+      const [name, ...rest] = part.trim().split(";");
+      const dur = /dur=([0-9.]+)/.exec(rest.join(";"));
+      if (name && dur) timing[`${name}_ms`] = Math.round(Number(dur[1]));
+      const place = /desc="([^"]*)"/.exec(rest.join(";"));
+      if (name && place?.[1]) where[name] = place[1];
+    }
+    timing.network_ms = Math.max(0, timing.total_ms - ["edge_ms", "relay_ms", "link_ms", "phone_ms"].reduce((sum, k) => sum + (timing[k] ?? 0), 0));
+    if (Object.keys(where).length) timing.where = where;
+    if (reply.result?._meta?.timing) timing.phone_parts = reply.result._meta.timing;
+    this.lastTiming = timing;
     const content = reply.result?.content ?? [];
     const text = content.filter((c) => c.type === "text").map((c) => c.text).join("");
     if (reply.result?.isError) throw new PhoneError(text, reply.result.structuredContent?.code ?? "failed");

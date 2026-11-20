@@ -100,6 +100,7 @@ class Phone:
         self.retries = retries
         self._id = 0
         self._connection = None
+        self.last_timing = {}
         self._path = "/"
         self._proxy_headers = {}
 
@@ -131,6 +132,25 @@ class Phone:
                     raise
                 time.sleep(1 + 2 * attempt)
 
+    def _note_timing(self, header, seconds, new_connection):
+        """Keeps where the last call's time went in `last_timing` (milliseconds): `total_ms` as seen from here, each
+        part the relay and the phone reported (`edge`, `relay`, `link`, `phone`), `network_ms` for what is left over
+        (the way from here to the first server and back), and the places Cloudflare handled it in `where`."""
+        timing = {"total_ms": round(seconds * 1000), "new_connection": new_connection}
+        where = {}
+        for part in (header or "").split(","):
+            name, _, rest = part.strip().partition(";")
+            dur = re.search(r"dur=([0-9.]+)", rest)
+            if name and dur:
+                timing[name + "_ms"] = round(float(dur.group(1)))
+            place = re.search(r'desc="([^"]*)"', rest)
+            if name and place and place.group(1):
+                where[name] = place.group(1)
+        timing["network_ms"] = max(0, timing["total_ms"] - sum(v for k, v in timing.items() if k in ("edge_ms", "relay_ms", "link_ms", "phone_ms")))
+        if where:
+            timing["where"] = where
+        self.last_timing = timing
+
     def _connect(self):
         """Opens the one connection this object keeps to the phone or its relay, through the environment's proxy if any."""
         target = urllib.parse.urlsplit(self.url)
@@ -161,6 +181,7 @@ class Phone:
             "User-Agent": USER_AGENT,
         }
         # One connection for the life of this object: opening a new one costs several round trips each call.
+        started = time.time()
         for fresh in (False, True):
             reused = self._connection is not None and not fresh
             try:
@@ -170,6 +191,7 @@ class Phone:
                 self._connection.request("POST", self._path, body=body, headers={**headers, **self._proxy_headers})
                 response = self._connection.getresponse()
                 status, raw = response.status, response.read()
+                self._note_timing(response.getheader("Server-Timing"), time.time() - started, not reused)
                 break
             except (http.client.HTTPException, OSError) as e:
                 self.close()
@@ -197,6 +219,9 @@ class Phone:
         if result.get("isError"):
             raise PhoneError(text, (result.get("structuredContent") or {}).get("code", "failed"))
         images = [base64.b64decode(c["data"]) for c in content if c.get("type") == "image"]
+        phone_parts = (result.get("_meta") or {}).get("timing")
+        if phone_parts:
+            self.last_timing["phone_parts"] = phone_parts
         try:
             return json.loads(text), images
         except ValueError:

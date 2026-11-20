@@ -94,13 +94,20 @@ class McpServer(
     private suspend fun respond(req: HttpRequest, out: OutputStream) {
         if (req.path.substringBefore('?') != "/mcp") return write(out, 404, json("error" to "not found"))
         val reply = handle(req.method, req.headers["authorization"], req.body)
-        write(out, reply.status, reply.body)
+        write(out, reply.status, reply.body, reply.ms)
     }
 
-    class Reply(val status: Int, val body: JSONObject?)
+    /** [ms] is how long this phone took over the request, for whoever is tracing where the time goes. */
+    class Reply(val status: Int, val body: JSONObject?, val ms: Long = 0)
 
     /** One MCP request, from the local HTTP server or from the relay. Checks the bearer token itself. */
     suspend fun handle(method: String, authorization: String?, rawBody: ByteArray): Reply {
+        val start = SystemClock.elapsedRealtime()
+        val reply = answer(method, authorization, rawBody)
+        return Reply(reply.status, reply.body, SystemClock.elapsedRealtime() - start)
+    }
+
+    private suspend fun answer(method: String, authorization: String?, rawBody: ByteArray): Reply {
         if (!token.matches(authorization)) return Reply(401, json("error" to "unauthorized"))
         when (method) {
             "POST" -> {}
@@ -136,12 +143,14 @@ class McpServer(
         args.remove("request_id")
         spec.required.keys.firstOrNull { !args.has(it) }?.let { return toolError("missing argument: $it", "bad_request") }
         // One call at a time: a repeat of a call still running waits here, then finds its answer.
+        val asked = SystemClock.elapsedRealtime()
         return callLock.withLock {
             val now = SystemClock.elapsedRealtime()
             requestId?.let { answered[it] }?.takeIf { now - it.first < REMEMBER_MS }?.let {
                 Log.i(TAG, "tool $name repeated; first answer returned")
                 return@withLock JSONObject(it.second.toString()).put("_meta", JSONObject().put("replayed", true))
             }
+            dev.miubridge.core.CallTiming.begin()
             val result = withTimeoutOrNull(spec.timeoutMs) {
                 runCatching { handler.invoke(name, args) }.getOrElse {
                     Log.w(TAG, "$name failed: ${it.javaClass.simpleName}")
@@ -160,7 +169,9 @@ class McpServer(
                 })
             }
             if (requestId != null) answered[requestId] = now to answer
-            answer
+            // Durations only: how long it waited for the call before it, how long the tool took, and the tool's own parts.
+            val timing = dev.miubridge.core.CallTiming.into(JSONObject().put("queued_ms", now - asked).put("tool_ms", SystemClock.elapsedRealtime() - now))
+            JSONObject(answer.toString()).put("_meta", JSONObject().put("timing", timing))
         }
     }
 
@@ -184,11 +195,12 @@ class McpServer(
         .put("id", id ?: JSONObject.NULL).put("error", JSONObject().put("code", code).put("message", message))
     private fun json(vararg pairs: Pair<String, Any>) = JSONObject().apply { pairs.forEach { put(it.first, it.second) } }
 
-    private fun write(out: OutputStream, status: Int, body: JSONObject?) {
+    private fun write(out: OutputStream, status: Int, body: JSONObject?, ms: Long = 0) {
         val bytes = body?.toString()?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
         val head = buildString {
             append("HTTP/1.1 $status ${REASONS[status] ?: "OK"}\r\n")
             if (body != null) append("Content-Type: application/json\r\n")
+            append("Server-Timing: phone;dur=$ms\r\n")
             append("Content-Length: ${bytes.size}\r\n\r\n")
         }
         out.write(head.toByteArray(Charsets.US_ASCII))

@@ -1,5 +1,6 @@
 package dev.miubridge.phone
 
+import dev.miubridge.core.CallTiming
 import dev.miubridge.R
 import android.content.ComponentName
 import android.content.Context
@@ -435,8 +436,9 @@ class PhoneController(private val context: Context) : CommandHandler {
     private suspend fun act(done: String, action: (HelperClient) -> Unit): CommandResult {
         requireScreen()
         val before = lastSnapshot
-        withHelper(action)
-        return CommandResult.Ok(snapshot(done, settled(before)))
+        CallTiming.measure("action_ms") { withHelper(action) }
+        val after = CallTiming.measure("settle_ms") { settled(before) }
+        return CommandResult.Ok(CallTiming.measure("read_ms") { snapshot(done, after) })
     }
 
     /**

@@ -2,6 +2,7 @@ package dev.miubridge.server
 
 import dev.miubridge.R
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -75,6 +76,7 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
         private val onOpen: () -> Unit,
     ) : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            Log.i(TAG, "relay link open")
             onOpen()
             _state.value = State(true, context.getString(R.string.relay_on))
         }
@@ -83,18 +85,21 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
             scope.launch {
                 val req = runCatching { JSONObject(text) }.getOrNull() ?: return@launch
                 val reply = (server ?: return@launch).handle(req.optString("method"), req.optString("authorization"), req.optString("body").toByteArray())
-                val out = JSONObject().put("id", req.optString("id")).put("status", reply.status)
+                val out = JSONObject().put("id", req.optString("id")).put("status", reply.status).put("ms", reply.ms)
                 reply.body?.let { out.put("body", it.toString()) }
                 webSocket.send(out.toString())
             }
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            Log.i(TAG, "relay closed the link: $code $reason")
             webSocket.close(1000, null)
             closed.cancel()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            // Never the URL or the key: only what kind of failure it was.
+            Log.w(TAG, "relay link failed: ${t.javaClass.simpleName} ${response?.code ?: ""}")
             if (response?.code == 403 || response?.code == 404) {
                 // The key was replaced or the device removed; retrying cannot help until the owner signs in again.
                 scope.cancel()
@@ -109,6 +114,7 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
     }
 
     companion object {
+        private const val TAG = "RelayClient"
         private val _state = MutableStateFlow(State())
         /** One relay connection per app process; the screen shows this. */
         val state: StateFlow<State> = _state
