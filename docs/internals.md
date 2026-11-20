@@ -71,6 +71,16 @@ Tools: `phone_apps`, `phone_launch`, `phone_snapshot`, `phone_screenshot`, `phon
 ./gradlew assembleDebug testDebugUnitTest
 ```
 
+A release build (`./gradlew assembleRelease`) is signed with your own key when `keystore.properties`
+exists in the project root, and debug-signed otherwise. The file is git-ignored:
+
+```properties
+storeFile=/absolute/path/to/your.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
+
 ## Relay and accounts
 
 The relay (`relay/`, a Cloudflare Worker with accounts in D1) is what agents on other networks go

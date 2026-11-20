@@ -1,8 +1,15 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// Release signing comes from keystore.properties in the project root (git-ignored), holding storeFile,
+// storePassword, keyAlias and keyPassword. Without that file a release build is debug-signed.
+val keystore = rootProject.file("keystore.properties").takeIf { it.exists() }
+    ?.let { file -> Properties().apply { file.inputStream().use { stream -> load(stream) } } }
 
 android {
     namespace = "dev.miubridge"
@@ -15,10 +22,18 @@ android {
         versionName = "0.1.0"
         buildConfigField("String", "RELAY_URL", "\"${providers.gradleProperty("relayUrl").getOrElse("https://phone.jinshang.ai")}\"")
     }
+    signingConfigs {
+        if (keystore != null) create("release") {
+            storeFile = file(keystore.getProperty("storeFile"))
+            storePassword = keystore.getProperty("storePassword")
+            keyAlias = keystore.getProperty("keyAlias")
+            keyPassword = keystore.getProperty("keyPassword")
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (keystore != null) "release" else "debug")
         }
     }
     buildFeatures { compose = true; buildConfig = true }

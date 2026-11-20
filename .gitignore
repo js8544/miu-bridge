@@ -5,3 +5,5 @@ local.properties
 .idea/
 dist/
 .DS_Store
+keystore.properties
+*.jks
