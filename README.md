@@ -1,4 +1,4 @@
-# Miu Bridge
+# Miu Bridge: Let any agent use your phone
 
 Let any AI agent use the apps on your Android phone, while you keep using it.
 
