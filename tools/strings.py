@@ -125,6 +125,8 @@ S = {
  "code_sent": ("Code sent to %1$s", "验证码已发到 %1$s"),
  "remote_on": ("Remote access on", "远程连接已开启"),
  "remote_connecting": ("Connecting…", "正在连接…"),
+ "update_title": ("Version %1$s is available", "有新版本 %1$s"),
+ "update_body": ("Tap to open the download page", "点这里打开下载页"),
  "trace_title": ("Help improve Miu Bridge", "帮助改进 Miu Bridge"),
  "trace_body": ("Send anonymous usage data from tool calls on this phone: which tool, which app, whether it worked, the error code, and how long it took. It helps us find where agents get stuck. You can change this at any time in More.", "把这台手机上工具调用的匿名使用数据发给我们：用了哪个工具、在哪个 App、成功没有、错误码、花了多久。帮我们找到 agent 在哪里卡住。随时可以在“更多”里改。"),
  "trace_never": ("Never sent: what is on the screen, screenshots, anything typed, links, your account or email. A random id is used instead of your account, and leaving deletes what was sent.", "绝不发送：屏幕上的内容、截图、输入的文字、链接、你的账号和邮箱。用一个随机 id 代替你的账号；退出时会删除已发送的数据。"),

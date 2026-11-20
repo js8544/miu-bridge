@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
@@ -99,6 +100,7 @@ import dev.miubridge.phone.WirelessAdb
 import dev.miubridge.server.Account
 import dev.miubridge.server.McpServer
 import dev.miubridge.server.RelayClient
+import dev.miubridge.server.Updates
 import dev.miubridge.ui.AppIcons
 import dev.miubridge.ui.MiuBridgeTheme
 import dev.miubridge.ui.LivePane
@@ -156,6 +158,8 @@ class MainActivity : ComponentActivity() {
         val relay by RelayClient.state.collectAsState()
         var signedIn by remember { mutableStateOf(account.signedIn) }
         var connectSheet by remember { mutableStateOf(false) }
+        var update by remember { mutableStateOf<Updates.Release?>(null) }
+        LaunchedEffect(Unit) { update = Updates(this@MainActivity).newer() }
         // First run walks the owner through setup one step at a time; a phone that was set up before goes straight home.
         val ui = remember { getSharedPreferences("ui", MODE_PRIVATE) }
         var guiding by remember {
@@ -204,6 +208,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
               } else {
+                update?.let { release -> item { UpdateCard(release) } }
                 item { StatusCard(running, phone, relay, signedIn) }
                 item { SectionTitle(stringResource(R.string.section_connect)) }
                 item {
@@ -263,6 +268,24 @@ class MainActivity : ComponentActivity() {
             },
             confirmButton = { TextButton(onClick = { consent.acceptNotice(); noticePending = false }) { Text(stringResource(R.string.notice_accept)) } },
         )
+    }
+
+    @Composable
+    private fun UpdateCard(release: Updates.Release) {
+        Box(Modifier.padding(bottom = 12.dp)) {
+            GroupCard {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.update_title, release.version)) },
+                    supportingContent = { Text(stringResource(R.string.update_body)) },
+                    leadingContent = { Icon(Icons.Filled.Info, null) },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                    colors = clearItem(),
+                    modifier = Modifier.clickable {
+                        runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(release.page))) }
+                    },
+                )
+            }
+        }
     }
 
     // ---- status ----

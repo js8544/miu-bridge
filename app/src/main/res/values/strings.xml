@@ -117,6 +117,8 @@
     <string name="code_sent">Code sent to %1$s</string>
     <string name="remote_on">Remote access on</string>
     <string name="remote_connecting">Connecting…</string>
+    <string name="update_title">Version %1$s is available</string>
+    <string name="update_body">Tap to open the download page</string>
     <string name="trace_title">Help improve Miu Bridge</string>
     <string name="trace_body">Send anonymous usage data from tool calls on this phone: which tool, which app, whether it worked, the error code, and how long it took. It helps us find where agents get stuck. You can change this at any time in More.</string>
     <string name="trace_never">Never sent: what is on the screen, screenshots, anything typed, links, your account or email. A random id is used instead of your account, and leaving deletes what was sent.</string>

@@ -117,6 +117,8 @@
     <string name="code_sent">验证码已发到 %1$s</string>
     <string name="remote_on">远程连接已开启</string>
     <string name="remote_connecting">正在连接…</string>
+    <string name="update_title">有新版本 %1$s</string>
+    <string name="update_body">点这里打开下载页</string>
     <string name="trace_title">帮助改进 Miu Bridge</string>
     <string name="trace_body">把这台手机上工具调用的匿名使用数据发给我们：用了哪个工具、在哪个 App、成功没有、错误码、花了多久。帮我们找到 agent 在哪里卡住。随时可以在“更多”里改。</string>
     <string name="trace_never">绝不发送：屏幕上的内容、截图、输入的文字、链接、你的账号和邮箱。用一个随机 id 代替你的账号；退出时会删除已发送的数据。</string>

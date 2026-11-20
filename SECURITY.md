@@ -21,6 +21,8 @@ issue for a vulnerability. You will get an answer within a few days.
   element was named, app version, Android level and phone maker. It never includes screen text,
   typed text, screenshots or URLs. Leaving the program asks the relay to delete what was sent.
 - On the same Wi-Fi no server is involved at all.
+- Once a day the app asks GitHub whether a newer release exists, to show a notice. The request says
+  nothing about the phone, and the owner installs updates themselves.
 - Payment and banking apps are refused. Payments, sign-ins and verifications are handed to the owner.
 
 A report that breaks one of these is exactly what we want to hear.
