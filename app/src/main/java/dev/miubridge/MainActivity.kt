@@ -568,7 +568,6 @@ class MainActivity : ComponentActivity() {
                     Icons.Filled.Warning to R.string.notice_point_terms,
                     Icons.Filled.CheckCircle to R.string.notice_point_yours,
                     AppIcons.LockOpen to R.string.notice_point_irreversible,
-                    AppIcons.Smartphone to R.string.notice_point_ask,
                 )) ListItem(
                     headlineContent = { Text(stringResource(text), style = MaterialTheme.typography.bodyMedium) },
                     leadingContent = { Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
@@ -991,10 +990,6 @@ class MainActivity : ComponentActivity() {
         var confirmRotate by remember { mutableStateOf(false) }
         val replaced = stringResource(R.string.token_replaced)
         var humanPace by remember { mutableStateOf(app.phone.pace != "fast") }
-        val consent = remember { dev.miubridge.core.AppConsent(this) }
-        var askPerApp by remember { mutableStateOf(consent.askPerApp) }
-        val allowedCount = remember(askPerApp) { consent.allowedApps.size }
-        fun setAskPerApp(on: Boolean) { askPerApp = on; consent.askPerApp = on }
         var tracing by remember { mutableStateOf(app.traces.enabled) }
         fun setTracing(on: Boolean) {
             tracing = on
@@ -1025,16 +1020,6 @@ class MainActivity : ComponentActivity() {
                 trailingContent = { Switch(checked = standby, onCheckedChange = ::setStandby) },
                 colors = clearItem(),
                 modifier = Modifier.clickable { setStandby(!standby) },
-            )
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.ask_app_title)) },
-                supportingContent = {
-                    Text(if (askPerApp && allowedCount > 0) stringResource(R.string.ask_app_body_count, allowedCount) else stringResource(R.string.ask_app_body))
-                },
-                leadingContent = { Icon(Icons.Filled.Warning, null) },
-                trailingContent = { Switch(checked = askPerApp, onCheckedChange = ::setAskPerApp) },
-                colors = clearItem(),
-                modifier = Modifier.clickable { setAskPerApp(!askPerApp) },
             )
             ListItem(
                 headlineContent = { Text(stringResource(R.string.pace_title)) },

@@ -56,7 +56,6 @@
         </service>
 
         <receiver android:name=".WirelessPairing$CodeReceiver" android:exported="false" />
-        <receiver android:name=".core.AppConsent$Receiver" android:exported="false" />
 
         <receiver android:name=".BootReceiver" android:exported="false">
             <intent-filter>

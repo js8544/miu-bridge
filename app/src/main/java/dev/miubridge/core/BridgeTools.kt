@@ -6,7 +6,6 @@ import org.json.JSONObject
 /** What MCP clients get: the phone tools plus the shared app manuals, listed in the instructions. */
 class BridgeTools(private val context: android.content.Context, private val phone: CommandHandler, private val skills: Skills) : CommandHandler {
     private val scripts = ScriptRunner(context, this)
-    private val consent = AppConsent(context)
 
     private val skillSpecs = mapOf(
         "phone_skills" to CommandSpec("List the apps agents have taken notes on (skills): name, description and the app packages each one covers. An app nobody has used yet is not listed."),
@@ -54,8 +53,7 @@ class BridgeTools(private val context: android.content.Context, private val phon
         `phone_locked` (the owner must unlock), `display_not_ready`, `helper_failed`, `reader_unavailable`,
         `not_found` (no such element, or a ref that is gone), `ambiguous` (several match; add `>> nth=N`),
         `not_actionable` (disabled or off-screen), `wait_timeout`, `timeout` (it may or may not have happened),
-        `paced` (stop in this app for now), `owner_consent_needed` (the owner has to allow this app on the phone
-        first; tell them, then call again), `quota_exceeded` (the owner's monthly allowance of remote calls is used
+        `paced` (stop in this app for now), `quota_exceeded` (the owner's monthly allowance of remote calls is used
         up; only through the relay, not on the phone's own Wi-Fi), `blocked_app`, `not_installed`, `on_main_display`, `bad_request`,
         `unknown_tool`, `script_error` (the script's own mistake or its time limit; a script stopped by a failed
         tool call carries that call's code instead), `failed`.
@@ -80,7 +78,7 @@ class BridgeTools(private val context: android.content.Context, private val phon
 
     override suspend fun invoke(name: String, params: JSONObject): CommandResult {
         val start = android.os.SystemClock.elapsedRealtime()
-        val result = consent.check(name, params) ?: dispatch(name, params)
+        val result = dispatch(name, params)
         runCatching { onCall?.invoke(name, params, result, android.os.SystemClock.elapsedRealtime() - start) }
         return result
     }
