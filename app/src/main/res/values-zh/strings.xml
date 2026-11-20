@@ -184,6 +184,7 @@
     <string name="notif_ready">等待 agent 连接 · 后台屏可用</string>
     <string name="notif_not_ready">后台屏未就绪</string>
     <string name="pair_title">无线调试配对</string>
+    <string name="pair_needs_notifications">请先允许通知：配对码要在通知里输入</string>
     <string name="pair_prompt">在“无线调试”里点“使用配对码配对”，然后下拉通知栏，在这里输入 6 位配对码</string>
     <string name="pair_working_title">正在配对…</string>
     <string name="pair_working_body">正在查找本机的配对服务</string>

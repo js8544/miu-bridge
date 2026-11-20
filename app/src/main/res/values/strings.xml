@@ -184,6 +184,7 @@
     <string name="notif_ready">Waiting for an agent · background screen ready</string>
     <string name="notif_not_ready">Background screen not ready</string>
     <string name="pair_title">Wireless debugging pairing</string>
+    <string name="pair_needs_notifications">Allow notifications first: the pairing code is typed into one</string>
     <string name="pair_prompt">In Wireless debugging tap “Pair device with pairing code”, then pull down the notifications and type the 6-digit code here</string>
     <string name="pair_working_title">Pairing…</string>
     <string name="pair_working_body">Looking for this phone\'s pairing service</string>

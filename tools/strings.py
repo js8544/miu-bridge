@@ -198,6 +198,7 @@ S = {
  "notif_not_ready": ("Background screen not ready", "后台屏未就绪"),
  # pairing
  "pair_title": ("Wireless debugging pairing", "无线调试配对"),
+ "pair_needs_notifications": ("Allow notifications first: the pairing code is typed into one", "请先允许通知：配对码要在通知里输入"),
  "pair_prompt": ("In Wireless debugging tap “Pair device with pairing code”, then pull down the notifications and type the 6-digit code here", "在“无线调试”里点“使用配对码配对”，然后下拉通知栏，在这里输入 6 位配对码"),
  "pair_working_title": ("Pairing…", "正在配对…"),
  "pair_working_body": ("Looking for this phone's pairing service", "正在查找本机的配对服务"),

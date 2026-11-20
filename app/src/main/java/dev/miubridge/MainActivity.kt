@@ -120,6 +120,21 @@ class MainActivity : ComponentActivity() {
     /** Bumped on resume so settings the owner changed in system pages are read again. */
     private var resumes by mutableIntStateOf(0)
 
+    // The pairing code is typed into a notification, so the permission has to be settled before the
+    // settings page covers this one: a notification posted while the question is still open is dropped.
+    private val askNotificationsThenPair = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) WirelessPairing.start(this)
+        else android.widget.Toast.makeText(this, R.string.pair_needs_notifications, android.widget.Toast.LENGTH_LONG).show()
+    }
+
+    private fun startPairing() {
+        val granted = android.os.Build.VERSION.SDK_INT < 33 ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) WirelessPairing.start(this) else askNotificationsThenPair.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -400,14 +415,13 @@ class MainActivity : ComponentActivity() {
                     GroupCard {
                         Step(1, R.string.step_dev_title, R.string.step_dev_body, devOn) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
                         Step(2, R.string.step_pair_title, R.string.step_pair_body, paired) {
-                            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-                            WirelessPairing.start(this@MainActivity)
+                            startPairing()
                         }
                     }
                     Button(
                         onClick = {
                             if (!devOn) startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS))
-                            else { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1); WirelessPairing.start(this@MainActivity) }
+                            else startPairing()
                         },
                         modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
                     ) { Text(stringResource(if (!devOn) R.string.guide1_open_about else R.string.guide1_pair)) }
@@ -620,8 +634,7 @@ class MainActivity : ComponentActivity() {
                         startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS))
                     }
                     Step(2, R.string.step_pair_title, R.string.step_pair_body, paired) {
-                        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-                        WirelessPairing.start(this@MainActivity)
+                        startPairing()
                     }
                     Step(3, R.string.step_battery_title, R.string.step_battery_body, battery) {
                         if (!battery) {
