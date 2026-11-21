@@ -36,7 +36,7 @@ Phones without a Wireless debugging page (HarmonyOS 4) still need a computer onc
 ## Connect an agent
 
 Any agent on any device works. On the phone tap 连接一个 agent (Connect an agent), choose the network
-path (any network needs sign-in; same Wi-Fi does not) and copy the connection details: one text with
+path (any network goes through the relay; same Wi-Fi does not) and copy the connection details: one text with
 the address, the token and both ways to use them. The agent decides which.
 
 Agents that write scripts in their own sandbox do not need MCP: `sdk/miu_bridge.py` and
@@ -81,12 +81,12 @@ keyAlias=...
 keyPassword=...
 ```
 
-## Relay and accounts
+## Relay
 
-The relay (`relay/`, a Cloudflare Worker with accounts in D1) is what agents on other networks go
-through. In the app, sign in with an emailed 6-digit code (the first sign-in creates the account); the
-phone registers itself as a device and keeps a WebSocket to the relay. Signing in again on the same
-phone keeps the same address. The app uses the hosted relay unless the owner enters another under
+The relay (`relay/`, a Cloudflare Worker with its devices in D1) is what agents on other networks go
+through. Turning on remote access needs no account: the phone registers itself under a hash of the id
+Android gives this app on that phone, and keeps a WebSocket to the relay. Registering again on the same
+phone keeps the same address and the month's count. The app uses the hosted relay unless the owner enters another under
 More → Relay server (`server/Account.kt`); `relayUrl` in `gradle.properties` changes the built-in
 default. See [relay/README.md](../relay/README.md) to run one.
 
