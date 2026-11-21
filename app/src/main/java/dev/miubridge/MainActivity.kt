@@ -301,9 +301,9 @@ class MainActivity : ComponentActivity() {
         val look = when {
             !running -> Look(stringResource(R.string.status_stopped_title), stringResource(R.string.status_stopped_body), Icons.Filled.PlayArrow, scheme.surfaceContainerHigh, scheme.onSurface)
             !phone.shellReady -> Look(stringResource(R.string.status_preparing_title), phone.message.ifBlank { stringResource(R.string.status_preparing_body) }, Icons.Filled.Refresh, scheme.secondaryContainer, scheme.onSecondaryContainer)
-            !signedIn -> Look(stringResource(R.string.status_local_title), stringResource(R.string.status_local_body), Icons.Filled.CheckCircle, scheme.primaryContainer, scheme.onPrimaryContainer)
+            !signedIn -> Look(stringResource(R.string.status_local_title), if (phone.resting) phone.message else stringResource(R.string.status_local_body), Icons.Filled.CheckCircle, scheme.primaryContainer, scheme.onPrimaryContainer)
             !relay.connected -> Look(stringResource(R.string.status_remote_down_title), relay.message.ifBlank { stringResource(R.string.remote_connecting) }, Icons.Filled.Warning, scheme.errorContainer, scheme.onErrorContainer)
-            else -> Look(stringResource(R.string.status_ready_title), stringResource(R.string.status_ready_body), Icons.Filled.CheckCircle, scheme.primaryContainer, scheme.onPrimaryContainer)
+            else -> Look(stringResource(R.string.status_ready_title), if (phone.resting) phone.message else stringResource(R.string.status_ready_body), Icons.Filled.CheckCircle, scheme.primaryContainer, scheme.onPrimaryContainer)
         }
         Card(
             colors = CardDefaults.cardColors(containerColor = look.container, contentColor = look.content),
@@ -396,9 +396,10 @@ class MainActivity : ComponentActivity() {
     // ---- first-run guide ----
 
     /**
-     * First run, one thing per screen: get the phone ready, start, hand it to an agent, see the agent
-     * arrive. Which step shows follows from the phone's real state, so leaving for a system page and
-     * coming back lands on the right one.
+     * First run for someone who has never heard of developer options: what is about to happen, sign
+     * in, give the phone its permission one action at a time, hand the instructions to the agent, see
+     * it arrive. Which step shows follows from the phone's real state, so leaving for a system page
+     * and coming back lands on the right one.
      */
     @Composable
     private fun Guide(
@@ -407,65 +408,126 @@ class MainActivity : ComponentActivity() {
     ) {
         val scope = rememberCoroutineScope()
         val ui = remember { getSharedPreferences("ui", MODE_PRIVATE) }
-        val (devOn, paired) = remember(resumes, phone.shellReady) {
-            val pairedNow = phone.shellReady || WirelessAdb.isPaired(this)
-            (pairedNow || Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1) to pairedNow
-        }
+        val paired = remember(resumes, phone.shellReady) { phone.shellReady || WirelessAdb.isPaired(this) }
         // For a phone whose debugging was opened from a computer instead of by pairing here.
         var preparedElsewhere by remember { mutableStateOf(ui.getBoolean("prepared_elsewhere", false)) }
+        fun setPreparedElsewhere(v: Boolean) { preparedElsewhere = v; ui.edit().putBoolean("prepared_elsewhere", v).apply() }
         var handedOver by remember { mutableStateOf(ui.getBoolean("handed_over", false)) }
         fun setHandedOver(v: Boolean) { handedOver = v; ui.edit().putBoolean("handed_over", v).apply() }
+        // The agent runs on the owner's own computer on this Wi-Fi: the one case that needs no account.
+        var lanOnly by remember { mutableStateOf(ui.getBoolean("lan_only", false)) }
+        fun setLanOnly(v: Boolean) { lanOnly = v; ui.edit().putBoolean("lan_only", v).apply() }
         val ready = running && phone.shellReady
         val consent = remember { dev.miubridge.core.AppConsent(this) }
         var noticed by remember { mutableStateOf(consent.acceptedNotice) }
         val step = when {
-            !ready && !paired && !preparedElsewhere -> 1
+            !noticed -> 0
+            !signedIn && !lanOnly -> 1
             !ready -> 2
-            !noticed -> 3
-            !handedOver -> 4
-            else -> 5
+            !handedOver -> 3
+            else -> 4
         }
 
         Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.guide_progress, step, 5), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                Text(
+                    if (step == 0) stringResource(R.string.guide_welcome_label) else stringResource(R.string.guide_progress, step.coerceAtMost(3), 3),
+                    style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f),
+                )
                 TextButton(onClick = onDone) { Text(stringResource(R.string.guide_skip)) }
             }
-            androidx.compose.material3.LinearProgressIndicator(progress = { step / 5f }, modifier = Modifier.fillMaxWidth())
+            androidx.compose.material3.LinearProgressIndicator(progress = { step / 4f }, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(28.dp))
             when (step) {
-                1 -> GuideStep(R.string.guide1_title, R.string.guide1_body) {
+                0 -> GuideStep(R.string.guide0_title, R.string.guide0_body) {
                     GroupCard {
-                        Step(1, R.string.step_dev_title, R.string.step_dev_body, devOn) { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }
-                        Step(2, R.string.step_pair_title, R.string.step_pair_body, paired) {
-                            startPairing()
+                        Column(Modifier.padding(vertical = 8.dp)) {
+                            for ((i, text) in listOf(R.string.guide0_one, R.string.guide0_two, R.string.guide0_three).withIndex()) ListItem(
+                                headlineContent = { Text(stringResource(text)) },
+                                leadingContent = { StepIcon(false, i + 1) },
+                                colors = clearItem(),
+                            )
                         }
                     }
-                    Button(
-                        onClick = {
-                            if (!devOn) startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS))
-                            else startPairing()
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
-                    ) { Text(stringResource(if (!devOn) R.string.guide1_open_about else R.string.guide1_pair)) }
-                    // Some phones (HarmonyOS, Android 10 and earlier) have no wireless debugging: a computer opens the door once.
-                    var computerHelp by remember { mutableStateOf(false) }
-                    TextButton(onClick = { computerHelp = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                        Text(stringResource(R.string.guide1_no_wireless))
-                    }
-                    if (computerHelp) ComputerSetupDialog(say, onDismiss = { computerHelp = false }) {
-                        computerHelp = false
-                        preparedElsewhere = true
-                        ui.edit().putBoolean("prepared_elsewhere", true).apply()
+                    Text(
+                        stringResource(R.string.guide0_risks), style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
+                    )
+                    RiskPoints()
+                    Button(onClick = { consent.acceptNotice(); noticed = true }, modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
+                        Text(stringResource(R.string.guide0_start))
                     }
                 }
-                2 -> {
+                1 -> {
+                    // Asked in the owner's terms: where the agent runs decides whether anything has to be signed up for.
+                    var cloud by remember { mutableStateOf(false) }
+                    var relayUrl by remember { mutableStateOf(account.baseUrl) }
+                    if (!cloud) GuideStep(R.string.guide_where_title, R.string.guide_where_body) {
+                        WhereCard(AppIcons.Wifi, R.string.where_computer_title, R.string.where_computer_body, R.string.where_computer_note) { setLanOnly(true) }
+                        Spacer(Modifier.height(12.dp))
+                        WhereCard(AppIcons.Cloud, R.string.where_cloud_title, R.string.where_cloud_body, R.string.where_cloud_note) { cloud = true }
+                        Text(
+                            stringResource(R.string.where_both), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp),
+                        )
+                    } else GuideStep(R.string.guide_relay_title, R.string.guide_relay_body) {
+                        var ownRelay by remember { mutableStateOf(false) }
+                        val hosted = relayUrl == Account.DEFAULT_RELAY_URL
+                        Text(
+                            if (hosted) stringResource(R.string.relay_hosted_title) else stringResource(R.string.relay_own_title, relayUrl.substringAfter("://")),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            stringResource(if (hosted) R.string.relay_hosted_body else R.string.relay_own_body), style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        )
+                        SignInForm(account, say, onAccountChanged, Modifier, showTitle = false)
+                        TextButton(onClick = { ownRelay = true }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 16.dp)) {
+                            Text(stringResource(if (hosted) R.string.relay_use_own else R.string.relay_change))
+                        }
+                        TextButton(onClick = { cloud = false }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.guide_back)) }
+                        if (ownRelay) {
+                            var draft by remember { mutableStateOf(if (hosted) "" else relayUrl) }
+                            var invalid by remember { mutableStateOf(false) }
+                            fun apply(url: String) = scope.launch {
+                                if (!account.useRelay(url)) { invalid = true; return@launch }
+                                ownRelay = false
+                                relayUrl = account.baseUrl
+                            }
+                            AlertDialog(
+                                onDismissRequest = { ownRelay = false },
+                                icon = { Icon(AppIcons.Cloud, null) },
+                                title = { Text(stringResource(R.string.relay_own_dialog_title)) },
+                                text = {
+                                    Column {
+                                        Text(stringResource(R.string.relay_own_dialog_body))
+                                        OutlinedTextField(
+                                            value = draft, onValueChange = { draft = it; invalid = false },
+                                            label = { Text(stringResource(R.string.relay_field)) },
+                                            placeholder = { Text("https://relay.example.com") },
+                                            isError = invalid,
+                                            supportingText = if (invalid) ({ Text(stringResource(R.string.relay_invalid)) }) else null,
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                                        )
+                                    }
+                                },
+                                confirmButton = { TextButton(onClick = { apply(draft) }) { Text(stringResource(R.string.action_save)) } },
+                                dismissButton = {
+                                    Row {
+                                        if (!hosted) TextButton(onClick = { apply("") }) { Text(stringResource(R.string.relay_use_default)) }
+                                        TextButton(onClick = { ownRelay = false }) { Text(stringResource(R.string.action_cancel)) }
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+                2 -> if (paired || preparedElsewhere) {
                     // Nothing for the owner to decide here: start by ourselves.
                     LaunchedEffect(Unit) {
-                        if (!BridgeService.running.value) {
-                            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-                            BridgeService.start(this@MainActivity)
-                        }
+                        if (!BridgeService.running.value) BridgeService.start(this@MainActivity)
                     }
                     GuideStep(R.string.guide2_title, R.string.guide2_body) {
                         GroupCard {
@@ -483,50 +545,100 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
                         ) { Text(stringResource(R.string.action_retry)) }
                         if (preparedElsewhere && !paired) TextButton(
-                            onClick = { preparedElsewhere = false; ui.edit().putBoolean("prepared_elsewhere", false).apply() },
+                            onClick = { setPreparedElsewhere(false) },
                             modifier = Modifier.align(Alignment.CenterHorizontally),
                         ) { Text(stringResource(R.string.guide_back)) }
                     }
-                }
-                3 -> GuideStep(R.string.notice_title, R.string.notice_intro) {
-                    RiskPoints()
-                    Button(onClick = { consent.acceptNotice(); noticed = true }, modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
-                        Text(stringResource(R.string.notice_accept))
+                } else GuideStep(R.string.guide_perm_title, R.string.guide_perm_body) {
+                    var computerHelp by remember { mutableStateOf(false) }
+                    // Wireless debugging arrived with Android 11; before it only a computer can open this door.
+                    if (android.os.Build.VERSION.SDK_INT < 30) {
+                        Text(stringResource(R.string.guide_perm_old), style = MaterialTheme.typography.bodyMedium)
+                        Button(onClick = { computerHelp = true }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
+                            Text(stringResource(R.string.guide_perm_computer))
+                        }
+                    } else {
+                        val (devOn, wirelessOn, wifi) = remember(resumes) {
+                            Triple(
+                                Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1,
+                                WirelessAdb.isOn(this@MainActivity),
+                                onWifi(),
+                            )
+                        }
+                        val done = listOf(wifi || wirelessOn, devOn, wirelessOn, false)
+                        val current = done.indexOfFirst { !it }
+                        PermStep(1, R.string.perm_wifi_title, done[0], current == 0) {
+                            Text(stringResource(R.string.perm_wifi_body), style = MaterialTheme.typography.bodyMedium)
+                            Button(onClick = { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                                Text(stringResource(R.string.perm_wifi_action))
+                            }
+                        }
+                        PermStep(2, R.string.perm_dev_title, done[1], current == 1) {
+                            Instructions(R.string.perm_dev_1, R.string.perm_dev_2, R.string.perm_dev_3)
+                            Sketch(listOf(R.string.sketch_about_other to null, R.string.sketch_build to R.string.sketch_tap7))
+                            Button(onClick = { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                                Text(stringResource(R.string.guide1_open_about))
+                            }
+                        }
+                        PermStep(3, R.string.perm_wireless_title, done[2], current == 2) {
+                            Instructions(R.string.perm_wireless_1, R.string.perm_wireless_2, R.string.perm_wireless_3)
+                            Sketch(listOf(R.string.sketch_usb to null, R.string.sketch_wireless to R.string.sketch_switch_on))
+                            Button(onClick = { WirelessPairing.openWirelessDebuggingSettings(this@MainActivity) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                                Text(stringResource(R.string.perm_wireless_action))
+                            }
+                            OutlinedButton(onClick = { computerHelp = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                Text(stringResource(R.string.guide1_no_wireless))
+                            }
+                        }
+                        PermStep(4, R.string.perm_pair_title, done[3], current == 3) {
+                            Instructions(R.string.perm_pair_1, R.string.perm_pair_2, R.string.perm_pair_3, R.string.perm_pair_4)
+                            Sketch(listOf(R.string.sketch_pair_code to R.string.sketch_tap, R.string.sketch_code to R.string.sketch_type_this))
+                            Button(onClick = { startPairing() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                                Text(stringResource(R.string.guide1_pair))
+                            }
+                        }
+                    }
+                    if (computerHelp) ComputerSetupDialog(say, onDismiss = { computerHelp = false }) {
+                        computerHelp = false
+                        setPreparedElsewhere(true)
                     }
                 }
-                4 -> {
+                3 -> {
                     val token = (application as App).token.value
-                    var remote by remember { mutableStateOf(true) }
+                    val remote = signedIn
                     val url = if (remote) account.mcpUrl ?: mcpUrl() else mcpUrl()
+                    val details = connectionDetails(url, token, account.baseUrl)
                     val copiedGuide = stringResource(R.string.copied_guide)
-                    var copied by remember { mutableStateOf(false) }
-                    GuideStep(R.string.guide3_title, R.string.guide3_body) {
-                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                            SegmentedButton(selected = remote, onClick = { remote = true }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text(stringResource(R.string.route_remote)) }
-                            SegmentedButton(selected = !remote, onClick = { remote = false }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text(stringResource(R.string.route_lan)) }
+                    val shareTitle = stringResource(R.string.guide_share_title)
+                    var sent by remember { mutableStateOf(false) }
+                    GuideStep(R.string.guide3_title, if (remote) R.string.guide3_body else R.string.guide3_body_lan) {
+                        Button(
+                            onClick = { copy(details); say(copiedGuide); sent = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = if (sent) ButtonDefaults.filledTonalButtonColors() else ButtonDefaults.buttonColors(),
+                        ) {
+                            Icon(AppIcons.Copy, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.guide3_copy))
                         }
+                        // Many agents live in a chat app: hand the text straight to it.
+                        OutlinedButton(
+                            onClick = {
+                                startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, details), shareTitle))
+                                sent = true
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        ) { Text(stringResource(R.string.guide3_share)) }
                         Text(
-                            stringResource(if (remote) R.string.guide3_remote_hint else R.string.guide3_lan_hint),
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp),
+                            stringResource(R.string.guide3_secret), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp),
                         )
-                        if (remote && !signedIn) {
-                            // Reaching the phone from other networks needs the account first.
-                            SignInForm(account, say, onAccountChanged, Modifier.padding(top = 16.dp), showTitle = false)
-                        } else {
-                            Button(
-                                onClick = { copy(connectionDetails(url, token, account.baseUrl)); say(copiedGuide); copied = true },
-                                modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
-                                colors = if (copied) ButtonDefaults.filledTonalButtonColors() else ButtonDefaults.buttonColors(),
-                            ) {
-                                Icon(AppIcons.Copy, null, Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.connect_copy_guide))
-                            }
-                            CopyRow(stringResource(R.string.connect_token), "••••••••" + token.takeLast(4), token, stringResource(R.string.copied_token), say)
-                            if (copied) Button(onClick = { setHandedOver(true) }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
-                                Text(stringResource(R.string.guide3_next))
-                            }
+                        CopyRow(stringResource(R.string.connect_token), "••••••••" + token.takeLast(4), token, stringResource(R.string.copied_token), say)
+                        if (sent) Button(onClick = { setHandedOver(true) }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+                            Text(stringResource(R.string.guide3_next))
+                        }
+                        if (!remote) TextButton(onClick = { setLanOnly(false) }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)) {
+                            Text(stringResource(R.string.guide3_use_remote))
                         }
                     }
                 }
@@ -554,6 +666,80 @@ class MainActivity : ComponentActivity() {
                         else OutlinedButton(onClick = onDone, modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) { Text(stringResource(R.string.guide4_later)) }
                         TextButton(onClick = { setHandedOver(false) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.guide_back)) }
                     }
+                }
+            }
+        }
+    }
+
+    /** One answer to "where does your agent run": what it is in the owner's words, examples, and what choosing it costs. */
+    @Composable
+    private fun WhereCard(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Int, body: Int, note: Int, onClick: () -> Unit) {
+        Surface(
+            onClick = onClick, shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+                Column(Modifier.padding(start = 16.dp).weight(1f)) {
+                    Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                    Text(stringResource(note), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+        }
+    }
+
+    /** Wi-Fi is up, whatever else (a VPN, mobile data) is also carrying traffic. */
+    private fun onWifi(): Boolean {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java)
+        @Suppress("DEPRECATION")
+        return cm.allNetworks.any { cm.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true }
+    }
+
+    /** One action of the permission step: a tick when the phone shows it is done, the how-to only for the one in turn. */
+    @Composable
+    private fun PermStep(number: Int, title: Int, done: Boolean, current: Boolean, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+        Row(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+            StepIcon(done, number)
+            Column(Modifier.padding(start = 16.dp).weight(1f)) {
+                Text(
+                    stringResource(title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (done || current) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                AnimatedVisibility(current) { Column(Modifier.padding(top = 8.dp)) { content() } }
+            }
+        }
+    }
+
+    @Composable
+    private fun Instructions(vararg lines: Int) {
+        for ((i, line) in lines.withIndex()) Row(Modifier.padding(bottom = 6.dp)) {
+            Text("${i + 1}.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(22.dp))
+            Text(stringResource(line), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+
+    /** A drawing of the system page the owner is about to see: its rows, and what to do on the one that matters. */
+    @Composable
+    private fun Sketch(rows: List<Pair<Int, Int?>>) {
+        Surface(
+            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        ) {
+            Column(Modifier.padding(8.dp)) {
+                for ((label, hint) in rows) Row(
+                    Modifier.fillMaxWidth()
+                        .background(if (hint != null) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(label), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
+                        color = if (hint != null) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (hint != null) Text(stringResource(hint), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }

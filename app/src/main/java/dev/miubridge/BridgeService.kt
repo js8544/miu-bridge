@@ -9,7 +9,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
+import android.app.AlarmManager
+import android.os.SystemClock
+import dev.miubridge.core.Awake
 import dev.miubridge.server.McpServer
 import dev.miubridge.server.RelayClient
 import kotlinx.coroutines.CoroutineScope
@@ -26,13 +28,18 @@ import kotlinx.coroutines.launch
  */
 class BridgeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var wakeLock: PowerManager.WakeLock? = null
     private var server: McpServer? = null
     private var relay: RelayClient? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_TICK) {
+            // Awake long enough for the relay link to notice it has gone quiet and reconnect.
+            Awake.touch(20_000)
+            scheduleTick()
+            return START_STICKY
+        }
         if (intent?.action == ACTION_STOP) {
             setWanted(this, false)
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -47,8 +54,10 @@ class BridgeService : Service() {
         }
         if (server == null) {
             val app = application as App
-            wakeLock = getSystemService(PowerManager::class.java)
-                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "miubridge:server").apply { acquire() }
+            // No standing wake lock: the phone sleeps between requests. Awake for start-up only.
+            Awake.init(this)
+            Awake.touch(60_000)
+            scheduleTick()
             server = McpServer(app.tools, app.token).also {
                 it.start()
                 _running.value = true
@@ -75,8 +84,19 @@ class BridgeService : Service() {
         _running.value = false
         (application as App).phone.applyStandby(serviceRunning = false)
         (application as App).phone.close()
-        wakeLock?.takeIf { it.isHeld }?.release()
+        getSystemService(AlarmManager::class.java).cancel(tick())
+        Awake.release()
         super.onDestroy()
+    }
+
+    private fun tick() = PendingIntent.getService(
+        this, 2, Intent(this, BridgeService::class.java).setAction(ACTION_TICK), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    /** A sparse wake-up while the phone sleeps, so a relay link that died in its sleep is found and remade. */
+    private fun scheduleTick() {
+        getSystemService(AlarmManager::class.java)
+            .setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + TICK_MS, tick())
     }
 
     private fun notification(text: String): Notification {
@@ -97,6 +117,8 @@ class BridgeService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "dev.miubridge.STOP"
+        private const val ACTION_TICK = "dev.miubridge.TICK"
+        private const val TICK_MS = 10 * 60_000L
         private val _running = MutableStateFlow(false)
         val running: StateFlow<Boolean> = _running
 

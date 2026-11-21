@@ -357,6 +357,7 @@ function quotaExceeded(id: unknown, usage: Usage): Response {
 type Pending = { resolve: (r: Response) => void; timer: ReturnType<typeof setTimeout> };
 type CachedUsage = Usage & { at: number };
 const USAGE_REFRESH_MS = 5 * 60_000;
+const KEEPALIVE_MS = 55_000;
 
 /** One per device. Only the Worker reaches it, after checking the device exists (and its key on connect). */
 export class Phone implements DurableObject {
@@ -387,9 +388,23 @@ export class Phone implements DurableObject {
     // allowance, so a plan change or another phone's use shows at the latest on the next reconnect.
     const owner = request.headers.get("X-Relay-User");
     if (owner) this.state.waitUntil(Promise.all([this.state.storage.put("owner", owner), this.state.storage.delete("usage")]));
+    // From here on the relay keeps the link open, so the phone can sleep between requests.
+    this.state.waitUntil(this.state.storage.setAlarm(Date.now() + KEEPALIVE_MS));
     // Where the phone came in: part of the trace of a slow call.
     this.state.waitUntil(this.state.storage.put("phone_colo", request.headers.get("X-Relay-Colo") ?? ""));
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /**
+   * The keepalive: a byte to the phone often enough that the network in between does not close an
+   * idle link (the edge and mobile carriers drop quiet ones). It comes from this side because a sleeping phone's
+   * own timers do not run, while a packet arriving wakes it. Stops when the phone is gone.
+   */
+  async alarm(): Promise<void> {
+    const sockets = this.state.getWebSockets();
+    if (sockets.length === 0) return;
+    for (const ws of sockets) { try { ws.send("k"); } catch { /* closing */ } }
+    await this.state.storage.setAlarm(Date.now() + KEEPALIVE_MS);
   }
 
   /**

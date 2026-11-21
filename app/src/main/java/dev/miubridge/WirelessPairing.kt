@@ -31,6 +31,26 @@ object WirelessPairing {
     fun start(context: Context) {
         notify(context, context.getString(R.string.pair_title), context.getString(R.string.pair_prompt), withInput = true)
         openWirelessDebuggingSettings(context)
+        watchForCode(context.applicationContext)
+    }
+
+    private val watch = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * The phone advertises its pairing service only while the six digits are on screen. That is the
+     * moment the owner needs the input, so bring the notification back to the top of the screen then,
+     * instead of expecting them to remember it is in the shade.
+     */
+    private fun watchForCode(context: Context) {
+        val mine = watch.incrementAndGet()
+        thread(name = "pairing-code-watch") {
+            val port = runCatching { WirelessAdb.findLocalPort(context, WirelessAdb.PAIRING_SERVICE, 5 * 60_000) }.getOrNull()
+            if (port == null || watch.get() != mine || WirelessAdb.isPaired(context)) return@thread
+            val manager = context.getSystemService(NotificationManager::class.java)
+            // A fresh notification, not an update: only a new one drops down over the settings page.
+            manager.cancel(NOTIFICATION_ID)
+            notify(context, context.getString(R.string.pair_code_seen_title), context.getString(R.string.pair_code_seen_body), withInput = true)
+        }
     }
 
     fun openWirelessDebuggingSettings(context: Context) {
@@ -47,6 +67,7 @@ object WirelessPairing {
     }
 
     internal fun pair(context: Context, code: String, paired: () -> Unit = {}) {
+        watch.incrementAndGet()
         notify(context, context.getString(R.string.pair_working_title), context.getString(R.string.pair_working_body))
         val port = WirelessAdb.findLocalPort(context, WirelessAdb.PAIRING_SERVICE, 15_000)
         if (port == null) {

@@ -20,6 +20,7 @@ import dev.miubridge.core.CommandResult
 import dev.miubridge.core.CommandSpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +45,8 @@ data class PhoneState(
     val message: String = "",
     /** When an agent last acted on the background display (elapsedRealtime), 0 if never. */
     val lastUsedAt: Long = 0,
+    /** The background display was put away after a while without use; the next call brings it back. */
+    val resting: Boolean = false,
 )
 
 /**
@@ -116,14 +119,37 @@ class PhoneController(private val context: Context) : CommandHandler {
         }
     }
 
+    private var idle: Job? = null
+
+    /**
+     * Puts the background display away once nothing has used it for [REST_AFTER_MS]: the helper
+     * process stops and the apps on it close, so nothing keeps drawing or running for no one. The
+     * next call starts it again and is told the apps were closed.
+     */
+    private fun restAfterIdle() {
+        idle?.cancel()
+        idle = scope.launch {
+            delay(REST_AFTER_MS)
+            if (helper == null) return@launch
+            Log.i(TAG, "background display unused for ${REST_AFTER_MS / 60_000} min; putting it away")
+            close()
+            restarted = true
+            _state.update { it.copy(shellReady = true, resting = true, message = context.getString(R.string.phone_resting)) }
+        }
+    }
+
     override fun specs(): Map<String, CommandSpec> = PhoneSpecs.all
 
     override fun guideMarkdown(): String = PhoneSpecs.guide
 
     override suspend fun invoke(name: String, params: JSONObject): CommandResult = try {
-        screenKeeper.touch()
-        // Listing apps and asking for status touch nothing on the display, so they work in any state.
+        // Listing apps and asking for status touch nothing on the display, so they work in any state
+        // and must not keep the owner's screen lit.
         val passive = name == "phone_apps" || name == "phone_status"
+        if (!passive) {
+            screenKeeper.touch()
+            restAfterIdle()
+        }
         if (!passive && screenKeeper.blocksBackground()) {
             throw BadRequest("the phone is locked; on this Android version the background display cannot be used behind the lock screen. Ask the owner to unlock the phone, then retry.", "phone_locked")
         }
@@ -136,14 +162,14 @@ class PhoneController(private val context: Context) : CommandHandler {
             val s = screen
             if (h != null && s != null) runCatching { setupLock.withLock { ensureAccessibility(h, s.id) } }
         }
-        if (!passive && name in PhoneSpecs.all) _state.update { it.copy(lastUsedAt = SystemClock.elapsedRealtime()) }
+        if (!passive && name in PhoneSpecs.all) _state.update { it.copy(lastUsedAt = SystemClock.elapsedRealtime(), resting = false) }
         var result = if (name in PACED) paced(name, params) { run(name, params) } else run(name, params)
         if (result is CommandResult.Ok && name in RETURNS_SCREEN) result = withPicture(result, params.optBoolean("screenshot"))
         if (restarted && result is CommandResult.Ok && !passive) {
             restarted = false
             result.payload.put("restarted", true).put(
                 "notice",
-                "The background display was restarted a moment ago (the app was updated or its service restarted). " +
+                "The background display was restarted a moment ago (it was put away after a while without use, or the app was updated). " +
                     "Apps that were open on it were closed by that, not by a crash. Launch what you need again.",
             )
         }
@@ -175,7 +201,9 @@ class PhoneController(private val context: Context) : CommandHandler {
         val out = JSONObject()
             .put("version", context.packageManager.getPackageInfo(context.packageName, 0).versionName)
             .put("locked", screenKeeper.blocksBackground())
-            .put("ready", s != null && helper != null)
+            // Put away after a while without use still counts as ready: the next call brings it back.
+            .put("ready", (s != null && helper != null) || state.value.resting)
+            .put("resting", state.value.resting)
             .put("reader", svc != null)
             .put("restarted", restarted)
         if (s != null) {
@@ -848,6 +876,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         /** Results of these carry the element tree, and can carry a picture with it. */
         private val RETURNS_SCREEN = setOf("phone_launch", "phone_open_url", "phone_snapshot", "phone_tap", "phone_long_press", "phone_swipe", "phone_type", "phone_key", "phone_wait")
         /** How long a result waits for a progress indicator the action started. */
+        private const val REST_AFTER_MS = 10 * 60_000L
         private const val LOADING_WAIT_MS = 6_000L
         /** How long an action that changed nothing is given to show its effect. */
         private const val UNCHANGED_WAIT_MS = 1_500L

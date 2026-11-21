@@ -163,7 +163,8 @@ class AgentSession(private val app: App) {
         job = scope.launch {
             _state.update { it.copy(running = true) }
             try {
-                runAgent()
+                // The service no longer holds the CPU awake by itself: a run on this phone must, or it stalls when the screen goes off.
+                dev.miubridge.core.Awake.during { runAgent() }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     session.appendMessage(Messages.error("aborted by the owner", llm().model.id, aborted = true))

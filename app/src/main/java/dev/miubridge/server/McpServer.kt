@@ -103,7 +103,7 @@ class McpServer(
     /** One MCP request, from the local HTTP server or from the relay. Checks the bearer token itself. */
     suspend fun handle(method: String, authorization: String?, rawBody: ByteArray): Reply {
         val start = SystemClock.elapsedRealtime()
-        val reply = answer(method, authorization, rawBody)
+        val reply = dev.miubridge.core.Awake.during { answer(method, authorization, rawBody) }
         return Reply(reply.status, reply.body, SystemClock.elapsedRealtime() - start)
     }
 
