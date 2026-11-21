@@ -138,7 +138,7 @@ export class Phone {
   // --- looking ---
   /** Launchable apps: [{label, package, blocked?}]; with a query, only those whose label or package contains it. */
   async apps(query) { return (await this.call("phone_apps", { query })).data.apps ?? []; }
-  /** The phone's state without touching it: locked, ready, display {id, width, height, dpi}, package, reader, restarted, version. */
+  /** The phone's state without touching it: locked, ready, display {id, width, height, dpi}, package, reader, restarted, handed_off (the package the owner holds from handoff, or null), version. */
   async status() { return (await this.call("phone_status")).data; }
   /** The screen as text. Every method that returns a Screen takes a last argument {screenshot: true} to get its picture too (screen.screenshot). */
   snapshot(opts) { return this.#screen("phone_snapshot", {}, opts); }

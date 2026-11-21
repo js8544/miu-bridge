@@ -197,9 +197,14 @@ class PhoneController(private val context: Context) : CommandHandler {
     }
 
     /** What state the phone is in, read without touching the display. */
-    private fun status(): JSONObject {
+    private suspend fun status(): JSONObject {
         val s = screen
         val svc = ScreenReaderService.current.value
+        // Asked of a helper that is already running, never one started for this: status touches nothing.
+        val handedOff = helper?.let { h ->
+            runCatching { withContext(Dispatchers.IO) { h.call("handed_off", timeoutMs = 2_000) } }.getOrNull()
+                ?.json?.optString("package")?.takeIf { it.isNotEmpty() && it != "null" }
+        }
         val out = JSONObject()
             .put("version", context.packageManager.getPackageInfo(context.packageName, 0).versionName)
             .put("locked", screenKeeper.blocksBackground())
@@ -208,6 +213,7 @@ class PhoneController(private val context: Context) : CommandHandler {
             .put("resting", state.value.resting)
             .put("reader", svc != null)
             .put("restarted", restarted)
+            .put("handed_off", handedOff ?: JSONObject.NULL)
         if (s != null) {
             out.put("display", JSONObject().put("id", s.id).put("width", s.width).put("height", s.height).put("dpi", s.dpi))
             out.put("package", svc?.topPackage(s.id) ?: JSONObject.NULL)
@@ -578,22 +584,29 @@ class PhoneController(private val context: Context) : CommandHandler {
         val s = requireScreen()
         val svc = ScreenReaderService.current.value
             ?: throw BadRequest("the accessibility service is not connected, so elements cannot be found; use x and y from phone_screenshot", "reader_unavailable")
-        suspend fun fresh() = withContext(Dispatchers.IO) { svc.snapshot(s.id, s.width, s.height) }.also { lastSnapshot = it }
+        // A look at the screen for finding the element only. It must not replace lastSnapshot: the agent
+        // has not seen it, and its refs are numbered afresh, so the agent's next ref would name another element.
+        suspend fun fresh() = withContext(Dispatchers.IO) { svc.snapshot(s.id, s.width, s.height) }
         fun describe(key: String, r: UiRef) = "[$key] ${r.role}" + (r.name?.let { " \"$it\"" } ?: "") + (r.id?.let { " #$it" } ?: "")
 
         val key = Selector.refKey(target)
         val entry: UiRef = if (key != null) {
             val before = lastSnapshot ?: throw BadRequest("unknown ref $target; refs come from the latest snapshot, call phone_snapshot", "not_found")
             val known = before.refs[key] ?: throw BadRequest("unknown ref $target; refs come from the latest snapshot, call phone_snapshot", "not_found")
+            val now = fresh()
+            val wasOneOf = before.refs.values.count { it.sameElementAs(known) }
+            // The same live node is not enough: lists reuse a row's node for another item as they scroll.
+            // It must still show the same element, and one of several alike must not have moved.
             val node = known.handle as? AccessibilityNodeInfo
-            if (node != null && withContext(Dispatchers.IO) { node.refresh() } && node.isVisibleToUser) known
+            val kept = node?.let { h -> now.refs.values.firstOrNull { it.handle == h } }
+                ?.takeIf { it.sameElementAs(known) && (wasOneOf == 1 || (it.x == known.x && it.y == known.y)) }
+            if (kept != null) kept
             else {
-                // The app replaced that node. Its role, name and id are what is left to recognise it by.
-                val wasOneOf = before.refs.values.count { it.sameElementAs(known) }
-                val same = fresh().refs.values.filter { it.sameElementAs(known) }
+                // The node now shows something else, or the app replaced it. Its role, name and id are
+                // what is left to recognise it by, and only when nothing else on the screen shares them.
+                val same = now.refs.values.filter { it.sameElementAs(known) }
                 when {
                     same.size == 1 && wasOneOf == 1 -> same.single()
-                    same.size == wasOneOf && known.nth < same.size -> same[known.nth]
                     same.isEmpty() -> throw BadRequest("${describe(key, known)} is no longer on the screen; take a new phone_snapshot", "not_found")
                     else -> throw BadRequest("the screen changed and ${describe(key, known)} can no longer be told apart from ${same.size} similar elements; take a new phone_snapshot", "ambiguous")
                 }

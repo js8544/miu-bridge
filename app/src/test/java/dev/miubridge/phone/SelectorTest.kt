@@ -49,10 +49,10 @@ class SelectorTest {
         assertTrue(keys("id=add >> nth=5").isEmpty())
     }
 
-    @Test fun refsRememberWhichOfSeveralTheyAre() {
-        assertEquals(0, snapshot.refs.getValue("e2").nth)
-        assertEquals(1, snapshot.refs.getValue("e3").nth)
-        assertTrue(snapshot.refs.getValue("e2").sameElementAs(snapshot.refs.getValue("e3")))
+    @Test fun alikeElementsAreToldApartOnlyByPosition() {
+        val (a, b) = snapshot.refs.getValue("e2") to snapshot.refs.getValue("e3")
+        assertTrue(a.sameElementAs(b))
+        assertTrue(a.x != b.x || a.y != b.y)
     }
 
     @Test(expected = IllegalArgumentException::class) fun rejectsUnknownForms() { Selector.parse("css=.btn") }

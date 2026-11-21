@@ -30,13 +30,13 @@ data class UiWindow(val title: String?, val root: UiNode)
 
 /**
  * What a ref stands for: an element, not a spot on the screen. [handle] is the live node, asked for
- * its position when an action happens; [role], [name], [id] and [nth] (its place among elements with
- * the same three) find it again if that node has been replaced. [x],[y] are where it was when the
- * snapshot was taken, for display only.
+ * its position when an action happens; [role], [name] and [id] check that the node still shows this
+ * element (lists reuse nodes) and find it again if the node has been replaced. [x],[y] are where it
+ * was when the snapshot was taken: shown to the agent, and checked when several elements look alike.
  */
 data class UiRef(
     val x: Int, val y: Int, val editable: Boolean, val handle: Any?,
-    val role: String = "", val name: String? = null, val id: String? = null, val nth: Int = 0, val enabled: Boolean = true,
+    val role: String = "", val name: String? = null, val id: String? = null, val enabled: Boolean = true,
 ) {
     fun sameElementAs(other: UiRef) = role == other.role && name == other.name && id == other.id
 }
@@ -145,8 +145,7 @@ object SnapshotFormatter {
                     val y = (maxOf(node.top, 0) + minOf(node.bottom, height)) / 2
                     val name = own ?: borrowed
                     val id = node.viewId?.substringAfter(":id/")?.takeIf { it.isNotBlank() }
-                    val draft = UiRef(x, y, node.editable, node.handle, role(node), name, id, 0, node.enabled)
-                    refs[ref] = draft.copy(nth = refs.values.count { it.sameElementAs(draft) })
+                    refs[ref] = UiRef(x, y, node.editable, node.handle, role(node), name, id, node.enabled)
                     lines += line(node, ref, depth, name, x, y)
                     childCovered = covered || borrowed != null
                 }

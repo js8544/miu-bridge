@@ -25,7 +25,9 @@ internal object PhoneSpecs {
         "phone_status" to CommandSpec(
             "The phone's state, read without touching the display: `locked`, `ready` (the background display is up), its `display` " +
                 "(id, width, height, dpi), the `package` in front on it, `reader` (element trees are available), `restarted` " +
-                "(the display was restarted and the apps on it closed; not yet reported in a result), and the app `version`.",
+                "(the display was restarted and the apps on it closed; not yet reported in a result), `handed_off` (the package " +
+                "given to the owner by phone_handoff and still open on their screen, so phone_takeback can bring it back; null if none), " +
+                "and the app `version`.",
         ),
         "phone_launch" to CommandSpec(
             "Open an app on the background display (or bring its task there to the front). Payment and banking apps are refused. $RETURNS",

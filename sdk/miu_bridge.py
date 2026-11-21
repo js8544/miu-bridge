@@ -237,7 +237,7 @@ class Phone:
         return self.call("phone_apps", query=query)[0].get("apps", [])
 
     def status(self):
-        """The phone's state without touching it: locked, ready, display {id, width, height, dpi}, package, reader, restarted, version."""
+        """The phone's state without touching it: locked, ready, display {id, width, height, dpi}, package, reader, restarted, handed_off (the package the owner holds from handoff, or null), version."""
         return self.call("phone_status")[0]
 
     def snapshot(self, screenshot=False):

@@ -109,6 +109,7 @@ class ScriptRunner(private val context: Context, private val tools: CommandHandl
         val SPEC = CommandSpec(
             "Run a JavaScript script on the phone that calls the other phone tools, so many steps take one round trip. " +
                 "In the script: call(name, args) runs a tool and returns its result object (it throws if the tool fails); " +
+                "the JavaScript SDK's `phone` object (phone.tap('text=Send'), phone.launch(pkg), …) works too, without await; " +
                 "findRef(snapshot, /pattern/) returns the ref of the first matching snapshot line; " +
                 "print(value) adds a line to the output; sleep(ms) waits. Only what you print, plus the script's return value, " +
                 "comes back, so read snapshots inside the script and print just what you need. Example: " +
@@ -137,6 +138,9 @@ class ScriptRunner(private val context: Context, private val tools: CommandHandl
 
             In a script:
             - `call(name, args)` runs a tool and returns its result object; it throws if the tool fails.
+              The JavaScript SDK's `phone` object works here too, with the same methods and arguments
+              (`phone.tap('text=Send')`, `phone.type('hello', 'role=input')`, `phone.swipe('up')`), but without
+              `await`: each call returns its result directly.
             - Name elements with selectors, which need no snapshot: `call('phone_tap', {ref: 'text=Send'})`,
               `{ref: 'id=tab_home'}`, `{ref: 'role=button[name="OK"]'}`. They wait up to 3 s for the element and fail if
               it is missing or ambiguous. `call('phone_wait', {target: 'text=Results'})` waits for a page to load.
@@ -181,6 +185,44 @@ class ScriptRunner(private val context: Context, private val tools: CommandHandl
               if (!r.ok) { var e = new Error(name + ': ' + r.error); e.code = r.code; throw e; }
               return r.result;
             }
+            // The same `phone` object as the JavaScript SDK, so code written for one runs in the other.
+            // Results that show the screen also read like the SDK's Screen: text, lines, find(), texts().
+            function __screen(r) {
+              if (r && typeof r.snapshot === 'string') {
+                r.text = r.snapshot;
+                r.lines = r.snapshot.split('\n').slice(1);
+                r.find = function (pattern) { return findRef(r.lines.join('\n'), pattern instanceof RegExp ? pattern : new RegExp(pattern)); };
+                r.texts = function () { return r.lines.map(function (l) { var m = l.match(/"([^"]*)"/); return m ? m[1] : undefined; }).filter(function (t) { return t !== undefined; }); };
+              }
+              return r;
+            }
+            function __target(t) { return typeof t === 'string' ? {ref: t} : (t || {}); }
+            function __opts(args, opts) { if (opts && opts.screenshot) args.screenshot = true; return args; }
+            var phone = {
+              call: function (name, args) { return call(name, args); },
+              apps: function (query) { return call('phone_apps', {query: query}).apps || []; },
+              status: function () { return call('phone_status', {}); },
+              snapshot: function (opts) { return __screen(call('phone_snapshot', __opts({}, opts))); },
+              screenshot: function () { return call('phone_screenshot', {}); },
+              wait: function (target, o) {
+                o = o || {};
+                return __screen(call('phone_wait', __opts({target: target, state: o.state || 'visible', timeout_ms: o.timeoutMs || 5000}, o)));
+              },
+              launch: function (pkg, opts) { return __screen(call('phone_launch', __opts({package: pkg}, opts))); },
+              openUrl: function (url, opts) { return __screen(call('phone_open_url', __opts({url: url}, opts))); },
+              tap: function (target, opts) { return __screen(call('phone_tap', __opts(__target(target), opts))); },
+              longPress: function (target, opts) { return __screen(call('phone_long_press', __opts(__target(target), opts))); },
+              swipe: function (how, opts) { return __screen(call('phone_swipe', __opts(typeof how === 'string' ? {direction: how} : (how || {}), opts))); },
+              type: function (text, target, opts) { return __screen(call('phone_type', __opts(target ? {text: text, ref: target} : {text: text}, opts))); },
+              key: function (key, opts) { return __screen(call('phone_key', __opts({key: key}, opts))); },
+              handoff: function () { return call('phone_handoff', {}); },
+              takeback: function () { return __screen(call('phone_takeback', {})); },
+              script: function () { throw new Error('a script cannot start another script'); },
+              notes: function () { return call('phone_skills', {}).skills || []; },
+              readNotes: function (name) { return call('phone_skill_read', {name: name}).skill || ''; },
+              learn: function (name, fact, o) { o = o || {}; return call('phone_skill_learn', {name: name, fact: fact, description: o.description, replaces: o.replaces}); },
+              forget: function (name, fact) { return call('phone_skill_forget', {name: name, fact: fact}); },
+            };
             function print() {
               __pb.print(Array.prototype.map.call(arguments, function (v) { return typeof v === 'string' ? v : JSON.stringify(v); }).join(' '));
             }
