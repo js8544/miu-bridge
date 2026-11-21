@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import dev.miubridge.BuildConfig
 import dev.miubridge.core.CommandResult
+import dev.miubridge.core.FeedbackBox
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,16 +28,79 @@ import java.util.UUID
  * Events carry a random install id made when the owner joins and dropped when they leave (after
  * asking the relay to forget it), so what was sent cannot be linked to the account or to a later
  * stint in the program.
+ *
+ * While the owner is in the program, agents may also leave a note (phone_feedback) when a tool did not
+ * behave as described. A note is the agent's own words plus the last few events before it; it is kept
+ * on the phone for the owner to read, sent under the same install id, and deleted with the rest.
  */
-class Traces(private val context: Context, private val account: Account) {
+class Traces(private val context: Context, private val account: Account) : FeedbackBox {
     private val prefs = context.getSharedPreferences("trace", Context.MODE_PRIVATE)
     private val http = OkHttpClient()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val buffer = ArrayList<JSONObject>()
+    /** The last few events, sent or not, to put beside an agent's note. */
+    private val recent = ArrayDeque<JSONObject>()
 
     /** Whether the owner has answered the question, either way. */
     val asked: Boolean get() = prefs.contains("enabled")
     val enabled: Boolean get() = prefs.getBoolean("enabled", false)
+
+    override val open: Boolean get() = enabled
+
+    /** One agent note as the owner sees it in the app. */
+    class Note(val at: Long, val expected: String, val happened: String, val sent: Boolean)
+
+    override fun submit(expected: String, happened: String) {
+        if (!enabled) return
+        val events = synchronized(recent) { JSONArray(recent.toList()) }
+        synchronized(prefs) {
+            val notes = storedNotes()
+            notes.put(JSONObject().put("at", System.currentTimeMillis()).put("expected", expected).put("happened", happened)
+                .put("recent", events).put("sent", false))
+            while (notes.length() > MAX_NOTES) notes.remove(0)
+            prefs.edit().putString("notes", notes.toString()).apply()
+        }
+        scope.launch { sendNotes() }
+    }
+
+    /** The notes agents left, newest first. */
+    fun notes(): List<Note> = synchronized(prefs) {
+        val notes = storedNotes()
+        (0 until notes.length()).map { notes.getJSONObject(it) }
+            .map { Note(it.getLong("at"), it.getString("expected"), it.getString("happened"), it.optBoolean("sent")) }
+            .reversed()
+    }
+
+    private fun storedNotes() = runCatching { JSONArray(prefs.getString("notes", "[]")) }.getOrDefault(JSONArray())
+
+    private fun sendNotes() {
+        val install = prefs.getString("install", null) ?: return
+        if (!enabled) return
+        val pending = synchronized(prefs) {
+            val notes = storedNotes()
+            (0 until notes.length()).map { notes.getJSONObject(it) }.filter { !it.optBoolean("sent") }
+        }
+        if (pending.isEmpty()) return
+        val body = JSONObject().put("install", install).put("app", BuildConfig.VERSION_NAME)
+            .put("sdk", Build.VERSION.SDK_INT).put("brand", Build.MANUFACTURER.take(40))
+            .put("notes", JSONArray(pending.map {
+                JSONObject().put("t", it.getLong("at") / 60_000).put("expected", it.getString("expected"))
+                    .put("happened", it.getString("happened")).put("recent", it.getJSONArray("recent"))
+            }))
+        val sent = runCatching {
+            http.newCall(
+                Request.Builder().url("${account.baseUrl}/api/feedback")
+                    .post(body.toString().toRequestBody("application/json".toMediaType())).build(),
+            ).execute().use { it.isSuccessful }
+        }.getOrDefault(false)
+        if (!sent) { Log.i(TAG, "feedback upload failed; ${pending.size} notes kept"); return }
+        val done = pending.map { it.getLong("at") }.toSet()
+        synchronized(prefs) {
+            val notes = storedNotes()
+            for (i in 0 until notes.length()) notes.getJSONObject(i).let { if (it.getLong("at") in done) it.put("sent", true) }
+            if (enabled) prefs.edit().putString("notes", notes.toString()).apply()
+        }
+    }
 
     fun start() {
         scope.launch {
@@ -54,8 +118,9 @@ class Traces(private val context: Context, private val account: Account) {
             return
         }
         val install = prefs.getString("install", null)
-        prefs.edit().putBoolean("enabled", false).remove("install").apply()
+        synchronized(prefs) { prefs.edit().putBoolean("enabled", false).remove("install").remove("notes").apply() }
         synchronized(buffer) { buffer.clear() }
+        synchronized(recent) { recent.clear() }
         if (install != null) scope.launch {
             runCatching {
                 http.newCall(Request.Builder().url("${account.baseUrl}/api/trace/$install").delete().build()).execute().close()
@@ -67,6 +132,10 @@ class Traces(private val context: Context, private val account: Account) {
     fun record(tool: String, params: JSONObject, result: CommandResult, ms: Long) {
         if (!enabled) return
         val e = event(tool, params, result, ms, System.currentTimeMillis())
+        synchronized(recent) {
+            recent.addLast(e)
+            while (recent.size > RECENT) recent.removeFirst()
+        }
         val full = synchronized(buffer) {
             buffer += e
             while (buffer.size > MAX_BUFFER) buffer.removeAt(0)
@@ -85,6 +154,7 @@ class Traces(private val context: Context, private val account: Account) {
         .toString(2)
 
     private fun flush() {
+        sendNotes() // notes that failed to go when they were written
         val install = prefs.getString("install", null) ?: return
         if (!enabled) return
         val batch = synchronized(buffer) { buffer.take(BATCH).also { buffer.subList(0, it.size).clear() } }
@@ -112,6 +182,8 @@ class Traces(private val context: Context, private val account: Account) {
         private const val BATCH = 100
         private const val MAX_BUFFER = 500
         private const val FLUSH_EVERY_MS = 10 * 60_000L
+        private const val RECENT = 5
+        private const val MAX_NOTES = 50
 
         /** The only fields an event has. Arguments are read only to tell how an element was named, never their values. */
         internal fun event(tool: String, params: JSONObject, result: CommandResult, ms: Long, now: Long): JSONObject {

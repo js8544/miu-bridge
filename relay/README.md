@@ -8,8 +8,8 @@ registers itself; no account is needed.
 It counts answered `tools/call` requests per phone per calendar month (UTC) and refuses further
 ones over the plan's allowance with `quota_exceeded`; `PLAN_LIMITS` in `src/index.ts` sets the
 allowances (`null` is unlimited). It also receives the app's opt-in experience improvement reports
-at `/api/trace`: metadata about tool calls under a random install id, described in
-[SECURITY.md](../SECURITY.md).
+at `/api/trace`: metadata about tool calls under a random install id, and agents' notes on tools
+that did not behave as described at `/api/feedback`, both described in [SECURITY.md](../SECURITY.md).
 
 ## Run your own
 

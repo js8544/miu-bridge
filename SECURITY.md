@@ -19,7 +19,11 @@ issue for a vulnerability. You will get an answer within a few days.
   phone reports metadata about each tool call under a random install id that is not linked to the
   account: tool name, package name of the app in front, success or error code, duration, how the
   element was named, app version, Android level and phone maker. It never includes screen text,
-  typed text, screenshots or URLs. Leaving the program asks the relay to delete what was sent.
+  typed text, screenshots or URLs. While joined, agents are also offered `phone_feedback` to write a
+  short note (at most 1000 characters per field) when a tool did not behave as described. A note is the
+  agent's own words, sent with the metadata of the last five calls; agents are told never to include
+  screen contents or private data, and the owner can read every note in the app. Leaving the program
+  asks the relay to delete what was sent, notes included.
 - On the same Wi-Fi no server is involved at all.
 - Once a day the app asks GitHub whether a newer release exists, to show a notice. The request says
   nothing about the phone, and the owner installs updates themselves.

@@ -23,7 +23,8 @@
  *   POST   /api/devices           (session) {name, deviceId?}  -> {deviceId, deviceKey, mcpUrl}
  *   DELETE /api/devices/<id>      (session)
  *   POST   /api/trace             {install, app, sdk, brand, events: [...]}  opt-in usage metadata (no account)
- *   DELETE /api/trace/<install>   forget everything sent under that install id
+ *   POST   /api/feedback          {install, app, sdk, brand, notes: [...]}   opt-in notes agents wrote (no account)
+ *   DELETE /api/trace/<install>   forget everything sent under that install id (events and notes)
  *   GET    /sdk/                  the client SDK and its guide (miu_bridge.py, miu-bridge.mjs)
  *   wss    /d/<deviceId>/connect  phone, header `X-Device-Key`; `?k=<seconds>` asks for that keepalive interval
  *   GET    /d/<deviceId>/usage    phone, header `X-Device-Key`  -> {month, used, limit}
@@ -72,6 +73,9 @@ const MAX_SENDS_PER_HOUR = 5;
 const MAX_CODE_ATTEMPTS = 5;
 /** Remote tool calls per calendar month (UTC), by plan; null is unlimited. */
 const MAX_TRACE_EVENTS = 200; // per request
+const MAX_FEEDBACK_NOTES = 20; // per request
+const MAX_FEEDBACK_CHARS = 1000; // per field
+const MAX_FEEDBACK_RECENT = 5; // trace events attached to a note
 const INSTALL_ID = /^[A-Za-z0-9-]{16,64}$/;
 const SELECTORS = new Set(["ref", "text", "id", "role", "xy"]);
 const PLAN_LIMITS: Record<string, number | null> = { free: 1000, paid: null };
@@ -194,10 +198,14 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     }
   }
   if (route === "POST /api/trace") return await trace(request, env);
+  if (route === "POST /api/feedback") return await feedback(request, env);
   const forget = url.pathname.match(/^\/api\/trace\/([^/]+)$/);
   if (forget && request.method === "DELETE") {
     if (!INSTALL_ID.test(forget[1])) throw new HttpError(400, "bad_request", "Bad request");
-    await env.DB.prepare("DELETE FROM trace_events WHERE install_id = ?").bind(forget[1]).run();
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM trace_events WHERE install_id = ?").bind(forget[1]),
+      env.DB.prepare("DELETE FROM agent_feedback WHERE install_id = ?").bind(forget[1]),
+    ]);
     return json(200, {});
   }
   const del = url.pathname.match(/^\/api\/devices\/([^/]+)$/);
@@ -282,6 +290,43 @@ async function kick(env: Env, id: string): Promise<void> {
  * tool names, app package names, codes and numbers.
  */
 async function trace(request: Request, env: Env): Promise<Response> {
+  const { body, install, app, sdk, brand } = await programPost(request, env, "events");
+  const now = Date.now();
+  const rows = (body.events as unknown[]).slice(0, MAX_TRACE_EVENTS).flatMap((v) => {
+    const e = traceEvent(v);
+    if (!e) return [];
+    return [env.DB.prepare(
+      "INSERT INTO trace_events (install_id, at, tool, pkg, ok, code, ms, sel, lines, app, sdk, brand, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(install, e.t, e.tool, e.pkg, e.ok ? 1 : 0, e.code, e.ms, e.sel, e.lines, app, sdk, brand, now)];
+  });
+  if (rows.length) await env.DB.batch(rows);
+  return json(200, { stored: rows.length });
+}
+
+/**
+ * Stores notes agents wrote when a tool did not behave as described. Like trace events they carry no
+ * account; unlike them they hold the agent's own words, bounded in length, which the owner can read
+ * in the app before and after they are sent. The trace events attached to a note are checked as above.
+ */
+async function feedback(request: Request, env: Env): Promise<Response> {
+  const { body, install, app, sdk, brand } = await programPost(request, env, "notes");
+  const now = Date.now();
+  const text = (v: unknown) => typeof v === "string" && v.trim() ? v.trim().slice(0, MAX_FEEDBACK_CHARS) : null;
+  const rows = (body.notes as unknown[]).slice(0, MAX_FEEDBACK_NOTES).flatMap((v) => {
+    const n = (v ?? {}) as Record<string, unknown>;
+    const at = Number(n.t), expected = text(n.expected), happened = text(n.happened);
+    if (!Number.isInteger(at) || !expected || !happened) return [];
+    const recent = (Array.isArray(n.recent) ? n.recent : []).slice(0, MAX_FEEDBACK_RECENT).map(traceEvent).filter(Boolean);
+    return [env.DB.prepare(
+      "INSERT INTO agent_feedback (install_id, at, expected, happened, recent, app, sdk, brand, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(install, at, expected, happened, JSON.stringify(recent), app, sdk, brand, now)];
+  });
+  if (rows.length) await env.DB.batch(rows);
+  return json(200, { stored: rows.length });
+}
+
+/** The rate limit and the fields every experience-program post shares; `list` names its array. */
+async function programPost(request: Request, env: Env, list: string) {
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   if (!(await env.TRACE_LIMIT.limit({ key: ip })).success) throw new HttpError(429, "rate_limited", "Too many requests");
   const body = await readJson(request);
@@ -290,25 +335,25 @@ async function trace(request: Request, env: Env): Promise<Response> {
   const sdk = Number(body.sdk);
   const brand = String(body.brand ?? "");
   if (!INSTALL_ID.test(install) || !/^[0-9A-Za-z.+-]{1,32}$/.test(app) || !Number.isInteger(sdk) || sdk < 1 || sdk > 200 ||
-      !/^[0-9A-Za-z ._-]{1,40}$/.test(brand) || !Array.isArray(body.events)) {
+      !/^[0-9A-Za-z ._-]{1,40}$/.test(brand) || !Array.isArray(body[list])) {
     throw new HttpError(400, "bad_request", "Bad request");
   }
-  const now = Date.now();
-  const rows = (body.events as unknown[]).slice(0, MAX_TRACE_EVENTS).flatMap((v) => {
-    const e = (v ?? {}) as Record<string, unknown>;
-    const tool = String(e.tool ?? "");
-    const at = Number(e.t), ms = Number(e.ms);
-    if (!/^phone_[a-z_]{1,30}$/.test(tool) || !Number.isInteger(at) || !Number.isInteger(ms) || ms < 0 || ms > 3_600_000) return [];
-    const pkg = typeof e.pkg === "string" && /^[A-Za-z0-9._]{1,150}$/.test(e.pkg) ? e.pkg : null;
-    const code = typeof e.code === "string" && /^[a-z_]{1,40}$/.test(e.code) ? e.code : null;
-    const sel = typeof e.sel === "string" && SELECTORS.has(e.sel) ? e.sel : null;
-    const lines = Number.isInteger(e.lines) && (e.lines as number) >= 0 && (e.lines as number) < 100_000 ? e.lines as number : null;
-    return [env.DB.prepare(
-      "INSERT INTO trace_events (install_id, at, tool, pkg, ok, code, ms, sel, lines, app, sdk, brand, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).bind(install, at, tool, pkg, e.ok === true ? 1 : 0, code, ms, sel, lines, app, sdk, brand, now)];
-  });
-  if (rows.length) await env.DB.batch(rows);
-  return json(200, { stored: rows.length });
+  return { body, install, app, sdk, brand };
+}
+
+/** One trace event reduced to its allowed fields, or null when its required ones are malformed. */
+function traceEvent(v: unknown) {
+  const e = (v ?? {}) as Record<string, unknown>;
+  const tool = String(e.tool ?? "");
+  const t = Number(e.t), ms = Number(e.ms);
+  if (!/^phone_[a-z_]{1,30}$/.test(tool) || !Number.isInteger(t) || !Number.isInteger(ms) || ms < 0 || ms > 3_600_000) return null;
+  return {
+    t, tool, ms, ok: e.ok === true,
+    pkg: typeof e.pkg === "string" && /^[A-Za-z0-9._]{1,150}$/.test(e.pkg) ? e.pkg : null,
+    code: typeof e.code === "string" && /^[a-z_]{1,40}$/.test(e.code) ? e.code : null,
+    sel: typeof e.sel === "string" && SELECTORS.has(e.sel) ? e.sel : null,
+    lines: Number.isInteger(e.lines) && (e.lines as number) >= 0 && (e.lines as number) < 100_000 ? e.lines as number : null,
+  };
 }
 
 // ---- device traffic ----

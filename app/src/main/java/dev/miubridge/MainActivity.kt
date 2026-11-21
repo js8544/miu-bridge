@@ -1093,6 +1093,7 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(stringResource(R.string.trace_body))
+                    Text(stringResource(R.string.trace_feedback), modifier = Modifier.padding(top = 8.dp))
                     Text(stringResource(R.string.trace_never), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
                     TextButton(onClick = { showSample = !showSample }, contentPadding = PaddingValues(0.dp)) {
@@ -1111,6 +1112,33 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
         )
     }
 
+    /** Every note agents left about tools, newest first, and whether it has gone out yet. */
+    @Composable
+    private fun FeedbackDialog(notes: List<dev.miubridge.server.Traces.Note>, onClose: () -> Unit) {
+        val format = remember { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT) }
+        AlertDialog(
+            onDismissRequest = onClose,
+            title = { Text(stringResource(R.string.feedback_count, notes.size)) },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    items(notes.size) { i ->
+                        val n = notes[i]
+                        Column {
+                            Text(
+                                format.format(java.util.Date(n.at)) + " · " +
+                                    stringResource(if (n.sent) R.string.feedback_sent else R.string.feedback_pending),
+                                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(stringResource(R.string.feedback_expected, n.expected), style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.feedback_happened, n.happened), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.action_close)) } },
+        )
+    }
+
     // ---- more ----
 
     @Composable
@@ -1124,6 +1152,7 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
         val replaced = stringResource(R.string.token_replaced)
         var humanPace by remember { mutableStateOf(app.phone.pace != "fast") }
         var tracing by remember { mutableStateOf(app.traces.enabled) }
+        var feedbackDialog by remember { mutableStateOf(false) }
         fun setTracing(on: Boolean) {
             tracing = on
             app.traces.setEnabled(on)
@@ -1170,6 +1199,18 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
                 colors = clearItem(),
                 modifier = Modifier.clickable { setTracing(!tracing) },
             )
+            // What agents wrote, so the owner sees every note that is sent in their name.
+            val notes = remember(tracing) { if (tracing) app.traces.notes() else emptyList() }
+            if (notes.isNotEmpty()) {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.feedback_count, notes.size)) },
+                    leadingContent = { Spacer(Modifier.size(24.dp)) },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                    colors = clearItem(),
+                    modifier = Modifier.clickable { feedbackDialog = true },
+                )
+            }
+            if (feedbackDialog) FeedbackDialog(app.traces.notes()) { feedbackDialog = false }
             ListItem(
                 headlineContent = { Text(stringResource(R.string.relay_title)) },
                 supportingContent = { Text(if (relayUrl == Account.DEFAULT_RELAY_URL) stringResource(R.string.relay_default) else relayUrl) },

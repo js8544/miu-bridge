@@ -35,6 +35,7 @@ class App : Application() {
         tools = BridgeTools(this, phone, skills)
         traces = Traces(this, Account(this)).also { it.start() }
         tools.onCall = traces::record
+        tools.feedback = traces
         // An app that shows a rate-limit or verification screen is remembered as one to handle slowly.
         phone.onFriction = { pkg, phrase ->
             val label = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)

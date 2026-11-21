@@ -38,7 +38,23 @@ class BridgeTools(private val context: android.content.Context, private val phon
         ),
     )
 
-    override fun specs(): Map<String, CommandSpec> = phone.specs() + skillSpecs + (ScriptRunner.TOOL to ScriptRunner.SPEC)
+    /** Set by the app; the feedback tool exists only while it is open. */
+    var feedback: FeedbackBox? = null
+    private val feedbackOpen get() = feedback?.open == true
+
+    private val feedbackSpec = CommandSpec(
+        "Tell the makers of this phone bridge that a tool did not behave as its description says: it did something else, " +
+            "or it reported success but the result was wrong. Not for your own mistakes, and not for an app on the phone " +
+            "behaving oddly. Describe only the tool's behaviour: never copy screen text, messages, names, codes or other " +
+            "private data. The owner can read every note in the app.",
+        required = mapOf(
+            "expected" to Param("string", "What you expected the tool to do, from its description. At most $FEEDBACK_CHARS characters."),
+            "happened" to Param("string", "What it did instead. At most $FEEDBACK_CHARS characters."),
+        ),
+    )
+
+    override fun specs(): Map<String, CommandSpec> = phone.specs() + skillSpecs + (ScriptRunner.TOOL to ScriptRunner.SPEC) +
+        (if (feedbackOpen) mapOf(FEEDBACK to feedbackSpec) else emptyMap())
 
     override fun guideMarkdown(): String = phone.guideMarkdown() + "\n\n" + ScriptRunner.GUIDE + "\n\n" + """
         ## Two ways in, one phone
@@ -71,7 +87,7 @@ class BridgeTools(private val context: android.content.Context, private val phon
         When you learn something about an app that would have saved you steps, record it with phone_skill_learn.
         When a recorded fact turns out wrong, fix it: phone_skill_learn with `replaces`, or phone_skill_forget.
 
-    """.trimIndent() + "\n" + skills.index()
+    """.trimIndent() + "\n" + (if (feedbackOpen) FEEDBACK_GUIDE + "\n\n" else "") + skills.index()
 
     /** Told about every finished call, from any transport (the opt-in experience improvement program listens). */
     var onCall: ((name: String, params: JSONObject, result: CommandResult, ms: Long) -> Unit)? = null
@@ -93,6 +109,15 @@ class BridgeTools(private val context: android.content.Context, private val phon
                 skills.learn(params.getString("name"), params.getString("fact"), params.optString("description").ifBlank { null },
                     params.optString("replaces").ifBlank { null })))
             "phone_skill_forget" -> CommandResult.Ok(JSONObject().put("done", skills.forget(params.getString("name"), params.getString("fact"))))
+            FEEDBACK -> {
+                val box = feedback?.takeIf { it.open } ?: return CommandResult.Error("unknown command $name", "unknown_tool")
+                val expected = params.getString("expected").trim()
+                val happened = params.getString("happened").trim()
+                require(expected.isNotEmpty() && happened.isNotEmpty()) { "expected and happened must not be empty" }
+                require(expected.length <= FEEDBACK_CHARS && happened.length <= FEEDBACK_CHARS) { "expected and happened are at most $FEEDBACK_CHARS characters each" }
+                box.submit(expected, happened)
+                CommandResult.Ok(JSONObject().put("done", "noted; the owner can read it in the app, and it is sent with their usage data"))
+            }
             ScriptRunner.TOOL -> scripts.run(params.getString("code")).let { r ->
                 val payload = JSONObject().put("output", r.output)
                 if (r.images.isNotEmpty()) payload.put("screenshots", r.images.size)
@@ -106,5 +131,18 @@ class BridgeTools(private val context: android.content.Context, private val phon
         CommandResult.Error(e.message ?: "bad arguments", "bad_request")
     } catch (e: org.json.JSONException) {
         CommandResult.Error("missing argument: ${e.message}", "bad_request")
+    }
+
+    private companion object {
+        const val FEEDBACK = "phone_feedback"
+        const val FEEDBACK_CHARS = 1000
+        val FEEDBACK_GUIDE = """
+            ## When a tool surprises you
+
+            If a tool does something other than its description says, or reports success while the result is wrong
+            (it tapped another element, text was added instead of replaced, the snapshot missed what the screen shows),
+            tell its makers with phone_feedback: what you expected and what happened. One note per surprise; do not
+            send one for your own mistakes, and never include screen contents or private data.
+        """.trimIndent()
     }
 }
