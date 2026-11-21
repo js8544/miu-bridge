@@ -27,7 +27,7 @@ await phone.tap("text=Wi-Fi");
   [run your own](relay/) and point the app at it. The hosted relay is free for 1,000 remote tool
   calls per phone per month; same Wi-Fi is never counted, and your own relay sets its own allowance.
 - **The token is the key to your phone.** Give it only to agents you trust.
-- Payment and banking apps are refused. Payments, sign-ins and verifications are handed back to you.
+- Payments, sign-ins and verifications are handed back to you. You choose which apps agents may open: every app except a block list (the default, empty), or only the apps on an allow list.
 - Automating an app may break that app's terms. That is your call and your responsibility.
 
 ## More

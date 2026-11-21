@@ -86,7 +86,7 @@
     <string name="notice_accept">I understand</string>
     <string name="notice_point_terms">Many apps\' terms forbid third-party tools from operating them automatically. Using Miu Bridge in such an app can get your account restricted or closed.</string>
     <string name="notice_point_yours">Agents act on your instructions, in your accounts. What they do there is your responsibility.</string>
-    <string name="notice_point_irreversible">Do not have an agent pay, transfer money, place orders or delete data. Payment and banking apps are blocked.</string>
+    <string name="notice_point_irreversible">Do not have an agent pay, transfer money, place orders or delete data.</string>
     <string name="guide1_open_about">Open About phone</string>
     <string name="guide1_pair">Go and pair</string>
     <string name="guide1_no_wireless">My phone has no “Wireless debugging”</string>
@@ -177,6 +177,15 @@
     <string name="signout_body">Agents on other networks will lose access. Turning it on again keeps the same address.</string>
     <string name="standby_title">Always ready</string>
     <string name="standby_body">Screen stays dim and never locks; uses battery</string>
+    <string name="apps_policy_title">Apps agents may open</string>
+    <string name="apps_policy_mode_block">Block list</string>
+    <string name="apps_policy_mode_allow">Allow list</string>
+    <string name="apps_policy_explain_block">Agents can open every app except the ones you tick. With nothing ticked, every app is open to them.</string>
+    <string name="apps_policy_explain_allow">Agents can open only the apps you tick, and no others. With nothing ticked, they cannot open any app.</string>
+    <string name="apps_policy_all">All apps</string>
+    <string name="apps_policy_blocked">Block list: %1$d apps closed to agents</string>
+    <string name="apps_policy_allowed">Allow list: only %1$d apps</string>
+    <string name="apps_policy_none">Allow list is empty: agents cannot open any app</string>
     <string name="pace_title">Act at a human pace</string>
     <string name="pace_body">Slower in apps with accounts, to avoid being flagged</string>
     <string name="onphone_title">Agent on this phone</string>

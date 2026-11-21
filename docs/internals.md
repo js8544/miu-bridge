@@ -2,7 +2,7 @@
 
 An Android app that lets AI agents (Claude Code, Codex, Muse, Instinct, …) operate apps on this
 phone through MCP. Agents work on a **background virtual display**; the owner keeps using the main
-screen. Payment and banking apps are refused; `phone_handoff` moves a task to the main screen for the
+screen. `phone_handoff` moves a task to the main screen for the
 owner to finish.
 
 ## How it works

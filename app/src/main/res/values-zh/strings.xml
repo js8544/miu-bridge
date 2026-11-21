@@ -86,7 +86,7 @@
     <string name="notice_accept">我了解了</string>
     <string name="notice_point_terms">很多 app 的用户协议禁止第三方工具自动操作。在这类 app 里使用 Miu Bridge，你的账号可能被限制或封禁。</string>
     <string name="notice_point_yours">agent 是按你的指令、用你的账号在操作。它做的事由你自己负责。</string>
-    <string name="notice_point_irreversible">不要让 agent 付款、转账、下单或删除数据。支付和银行类 app 已被拦截。</string>
+    <string name="notice_point_irreversible">不要让 agent 付款、转账、下单或删除数据。</string>
     <string name="guide1_open_about">打开“关于手机”</string>
     <string name="guide1_pair">去配对</string>
     <string name="guide1_no_wireless">我的手机里没有“无线调试”</string>
@@ -177,6 +177,15 @@
     <string name="signout_body">关闭后，别的网络上的 agent 连不上这台手机。再打开时地址不变。</string>
     <string name="standby_title">随时待命</string>
     <string name="standby_body">屏幕微亮、不自动锁屏；较费电，建议插电时用</string>
+    <string name="apps_policy_title">agent 能打开哪些 App</string>
+    <string name="apps_policy_mode_block">禁止列表</string>
+    <string name="apps_policy_mode_allow">允许列表</string>
+    <string name="apps_policy_explain_block">agent 能打开所有 App，除了你勾选的。一个都不勾，就是全部都能打开。</string>
+    <string name="apps_policy_explain_allow">agent 只能打开你勾选的 App，其他一律打不开。一个都不勾，agent 就什么都打不开。</string>
+    <string name="apps_policy_all">全部 App 都能打开</string>
+    <string name="apps_policy_blocked">禁止列表：%1$d 个 App 不能打开</string>
+    <string name="apps_policy_allowed">允许列表：只能打开 %1$d 个 App</string>
+    <string name="apps_policy_none">允许列表是空的：agent 什么 App 都打不开</string>
     <string name="pace_title">像人一样操作</string>
     <string name="pace_body">在有账号的 App 里放慢节奏，降低被风控的风险</string>
     <string name="onphone_title">手机上的 Agent</string>

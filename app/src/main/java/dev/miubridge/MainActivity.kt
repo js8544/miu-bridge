@@ -45,6 +45,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -101,6 +103,7 @@ import dev.miubridge.server.Account
 import dev.miubridge.server.McpServer
 import dev.miubridge.server.RelayClient
 import dev.miubridge.server.Updates
+import dev.miubridge.phone.AppPolicy
 import dev.miubridge.ui.AppIcons
 import dev.miubridge.ui.MiuBridgeTheme
 import dev.miubridge.ui.LivePane
@@ -1139,6 +1142,80 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
         )
     }
 
+    /** One line saying what the owner's app rule lets agents do. */
+    @Composable
+    private fun policySummary(mode: AppPolicy.Mode, blocked: Set<String>, allowed: Set<String>): String = when {
+        mode == AppPolicy.Mode.BLOCK && blocked.isEmpty() -> stringResource(R.string.apps_policy_all)
+        mode == AppPolicy.Mode.BLOCK -> stringResource(R.string.apps_policy_blocked, blocked.size)
+        allowed.isEmpty() -> stringResource(R.string.apps_policy_none)
+        else -> stringResource(R.string.apps_policy_allowed, allowed.size)
+    }
+
+    /**
+     * Picks the mode (block list or allow list) and the apps on the list for that mode. Each mode keeps
+     * its own list. Returns (mode, blocked, allowed) on save, or null when cancelled.
+     */
+    @Composable
+    private fun AppPolicyDialog(
+        mode: AppPolicy.Mode, blocked: Set<String>, allowed: Set<String>,
+        onDone: (Triple<AppPolicy.Mode, Set<String>, Set<String>>?) -> Unit,
+    ) {
+        var m by remember { mutableStateOf(mode) }
+        var b by remember { mutableStateOf(blocked) }
+        var a by remember { mutableStateOf(allowed) }
+        // The apps already on the current list first, so the owner sees what they chose without scrolling.
+        val apps = remember {
+            val listed = if (mode == AppPolicy.Mode.BLOCK) blocked else allowed
+            (application as App).phone.launchableApps().sortedBy { it.second !in listed }
+        }
+        val chosen = if (m == AppPolicy.Mode.BLOCK) b else a
+        fun toggle(pkg: String) {
+            if (m == AppPolicy.Mode.BLOCK) b = if (pkg in b) b - pkg else b + pkg
+            else a = if (pkg in a) a - pkg else a + pkg
+        }
+        AlertDialog(
+            onDismissRequest = { onDone(null) },
+            title = { Text(stringResource(R.string.apps_policy_title)) },
+            text = {
+                Column {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        AppPolicy.Mode.entries.forEachIndexed { i, option ->
+                            SegmentedButton(
+                                selected = m == option,
+                                onClick = { m = option },
+                                shape = SegmentedButtonDefaults.itemShape(i, AppPolicy.Mode.entries.size),
+                            ) {
+                                Text(stringResource(if (option == AppPolicy.Mode.BLOCK) R.string.apps_policy_mode_block else R.string.apps_policy_mode_allow))
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(if (m == AppPolicy.Mode.BLOCK) R.string.apps_policy_explain_block else R.string.apps_policy_explain_allow),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                    LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                        items(apps.size) { i ->
+                            val (label, pkg) = apps[i]
+                            Row(
+                                Modifier.fillMaxWidth().clickable { toggle(pkg) }.padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = pkg in chosen, onCheckedChange = { toggle(pkg) })
+                                Column {
+                                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                                    Text(pkg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { onDone(Triple(m, b, a)) }) { Text(stringResource(R.string.action_save)) } },
+            dismissButton = { TextButton(onClick = { onDone(null) }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
     // ---- more ----
 
     @Composable
@@ -1153,6 +1230,10 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
         var humanPace by remember { mutableStateOf(app.phone.pace != "fast") }
         var tracing by remember { mutableStateOf(app.traces.enabled) }
         var feedbackDialog by remember { mutableStateOf(false) }
+        var policyMode by remember { mutableStateOf(app.phone.appPolicy.mode) }
+        var policyBlocked by remember { mutableStateOf(app.phone.appPolicy.blocked) }
+        var policyAllowed by remember { mutableStateOf(app.phone.appPolicy.allowed) }
+        var policyDialog by remember { mutableStateOf(false) }
         fun setTracing(on: Boolean) {
             tracing = on
             app.traces.setEnabled(on)
@@ -1191,6 +1272,22 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
                 colors = clearItem(),
                 modifier = Modifier.clickable { setHumanPace(!humanPace) },
             )
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.apps_policy_title)) },
+                supportingContent = { Text(policySummary(policyMode, policyBlocked, policyAllowed)) },
+                leadingContent = { Icon(AppIcons.Smartphone, null) },
+                trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                colors = clearItem(),
+                modifier = Modifier.clickable { policyDialog = true },
+            )
+            if (policyDialog) AppPolicyDialog(policyMode, policyBlocked, policyAllowed) { saved ->
+                policyDialog = false
+                if (saved != null) {
+                    val policy = app.phone.appPolicy
+                    policy.mode = saved.first; policy.blocked = saved.second; policy.allowed = saved.third
+                    policyMode = saved.first; policyBlocked = saved.second; policyAllowed = saved.third
+                }
+            }
             ListItem(
                 headlineContent = { Text(stringResource(R.string.trace_title)) },
                 supportingContent = { Text(stringResource(R.string.trace_setting_body)) },

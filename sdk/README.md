@@ -117,5 +117,4 @@ needs (the facts you were after, or the part of the final screen you will act on
 - If a result has a `warning` (a rate-limit or verification screen), stop acting in that app and `handoff()`.
 - If a screen has `.restarted` set, the background display was restarted and apps that were open are closed;
   that is not a crash. Launch again.
-- Never pay, transfer money, place orders, delete data or change security settings. Payment and banking
-  apps are refused. On Android 12 and earlier the phone must be unlocked.
+- Never pay, transfer money, place orders, delete data or change security settings. On Android 12 and earlier the phone must be unlocked.

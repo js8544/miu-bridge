@@ -19,7 +19,7 @@ internal object PhoneSpecs {
 
     val all: Map<String, CommandSpec> = mapOf(
         "phone_apps" to CommandSpec(
-            "List launchable apps on the phone (label, package). Apps marked blocked cannot be launched by agents.",
+            "List launchable apps on the phone (label, package). Apps marked blocked are closed to agents by the owner's app rule.",
             optional = mapOf("query" to Param("string", "Only apps whose label or package contains this, e.g. \"mail\". Leave out for all of them.")),
         ),
         "phone_status" to CommandSpec(
@@ -30,7 +30,7 @@ internal object PhoneSpecs {
                 "and the app `version`.",
         ),
         "phone_launch" to CommandSpec(
-            "Open an app on the background display (or bring its task there to the front). Payment and banking apps are refused. $RETURNS",
+            "Open an app on the background display (or bring its task there to the front). Apps the owner has closed to agents are refused (`blocked_app`). $RETURNS",
             required = mapOf("package" to Param("string", "Package name from phone_apps, e.g. com.android.settings.")),
             optional = mapOf("screenshot" to shot),
             timeoutMs = 30_000,
@@ -145,6 +145,8 @@ internal object PhoneSpecs {
 
         Safety:
         - Do not do irreversible things: no paying, transferring money, placing orders, sending money-related messages, deleting data, or changing security settings.
-        - Payment and banking apps are blocked. For payment, login, face/SMS verification, or anything that needs the owner, call `phone_handoff` and tell the owner what is waiting. When the owner says they are done, `phone_takeback` returns the same app to you where they left it; do not open it again.
+        - The owner decides which apps you may open: either every app except a block list, or only the apps on an allow list.
+          `phone_apps` marks the closed ones `blocked`; opening one fails with `blocked_app`. Ask the owner instead of working around it.
+        - For payment, login, face/SMS verification, or anything that needs the owner, call `phone_handoff` and tell the owner what is waiting. When the owner says they are done, `phone_takeback` returns the same app to you where they left it; do not open it again.
     """.trimIndent()
 }

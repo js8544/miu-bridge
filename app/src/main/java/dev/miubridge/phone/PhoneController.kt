@@ -76,6 +76,8 @@ class PhoneController(private val context: Context) : CommandHandler {
     }
 
     private val prefs = context.getSharedPreferences("phone", Context.MODE_PRIVATE)
+    /** Which apps the owner lets agents open (all, unless they chose otherwise). */
+    val appPolicy = AppPolicy(context)
 
     /** The owner's choice to keep the screen dimly on (never auto-lock) while the service runs. */
     var standby: Boolean
@@ -318,26 +320,31 @@ class PhoneController(private val context: Context) : CommandHandler {
 
     // --- commands ---
 
-    private fun apps(query: String = ""): JSONArray {
+    /** Apps an agent could open: (label, package) of every launchable app but this one, by label. */
+    fun launchableApps(): List<Pair<String, String>> {
         val pm = context.packageManager
-        val launchable = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
-        val out = JSONArray()
-        launchable.map { it.activityInfo }
+        return pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .map { it.activityInfo }
             .filter { it.packageName != context.packageName }
             .distinctBy { it.packageName }
             .map { it.loadLabel(pm).toString() to it.packageName }
-            .filter { (label, pkg) -> query.isBlank() || label.contains(query, ignoreCase = true) || pkg.contains(query, ignoreCase = true) }
             .sortedBy { it.first }
+    }
+
+    private fun apps(query: String = ""): JSONArray {
+        val out = JSONArray()
+        launchableApps()
+            .filter { (label, pkg) -> query.isBlank() || label.contains(query, ignoreCase = true) || pkg.contains(query, ignoreCase = true) }
             .forEach { (label, pkg) ->
                 val app = JSONObject().put("label", label).put("package", pkg)
-                if (AppPolicy.isBlocked(pkg)) app.put("blocked", true)
+                if (!appPolicy.allows(pkg)) app.put("blocked", true)
                 out.put(app)
             }
         return out
     }
 
     private suspend fun launch(pkg: String): CommandResult {
-        if (AppPolicy.isBlocked(pkg)) return blocked(pkg)
+        if (!appPolicy.allows(pkg)) return blocked(pkg)
         val component = context.packageManager.getLaunchIntentForPackage(pkg)?.component
             ?: return CommandResult.Error("$pkg is not installed or has no launcher activity", "not_installed")
         return startOnScreen(pkg, listOf("-a", Intent.ACTION_MAIN, "-c", Intent.CATEGORY_LAUNCHER, "-n", component.flattenToString()), "launched $pkg")
@@ -348,7 +355,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         if (uri.scheme.isNullOrBlank()) throw BadRequest("url needs a scheme, e.g. https://")
         val target = context.packageManager.resolveActivity(Intent(Intent.ACTION_VIEW, uri), PackageManager.MATCH_DEFAULT_ONLY)
             ?.activityInfo?.packageName?.takeIf { it != "android" }
-        if (target != null && AppPolicy.isBlocked(target)) return blocked(target)
+        if (!appPolicy.allows(target)) return blocked(target)
         return startOnScreen(target, listOf("-a", Intent.ACTION_VIEW, "-d", url), "opened url")
     }
 
@@ -472,18 +479,15 @@ class PhoneController(private val context: Context) : CommandHandler {
             return CommandResult.Error("Nothing to take back: no app handed off by phone_handoff is on the owner's screen. Launch the app instead.", "not_found")
         }
         val pkg = reply.json.optString("package")
-        // The owner may have ended up somewhere agents must not act: give it straight back.
-        if (AppPolicy.isBlocked(pkg)) {
+        // The owner may have ended up in an app they keep agents out of: give it straight back.
+        if (!appPolicy.allows(pkg)) {
             withHelper { it.call("return_task", JSONObject().put("task", reply.json.getInt("task"))) }
             return blocked(pkg)
         }
         return CommandResult.Ok(snapshot("took $pkg back from the owner's screen, as they left it", settled(before)))
     }
 
-    private fun blocked(pkg: String) = CommandResult.Error(
-        "$pkg is a payment or banking app and cannot be opened by agents. Ask the owner, or use phone_handoff when a payment step is reached.",
-        "blocked_app",
-    )
+    private fun blocked(pkg: String?) = CommandResult.Error(appPolicy.refusal(pkg), "blocked_app")
 
     // --- shared steps ---
 
