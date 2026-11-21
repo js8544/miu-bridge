@@ -115,15 +115,25 @@ internal class HelperHost(main: Handler, private val apk: String) {
     /**
      * Wakes the background display's own power group, leaving the phone's screen as it is. Android puts
      * that group to sleep along with the phone; asleep, it draws nothing: screenshots are black and a
-     * launched app never shows. False where the system has no per-display wake (before Android 14).
+     * launched app never shows.
      */
     private fun wake(displayId: Int): Boolean {
         val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, "power")
         val power = Class.forName("android.os.IPowerManager\$Stub").getMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
         val wakeUp = runCatching {
             power.javaClass.getMethod("wakeUpWithDisplayId", Long::class.java, Int::class.java, String::class.java, String::class.java, Int::class.java)
-        }.getOrNull() ?: return false
-        wakeUp.invoke(power, android.os.SystemClock.uptimeMillis(), WAKE_REASON_APPLICATION, "miubridge", "com.android.shell", displayId)
+        }.getOrNull()
+        if (wakeUp != null) {
+            wakeUp.invoke(power, android.os.SystemClock.uptimeMillis(), WAKE_REASON_APPLICATION, "miubridge", SHELL, displayId)
+            return true
+        }
+        // Before that call existed (it came after Android 15's first release): a wake lock tied to the
+        // display wakes its group when acquired, and is let go at once.
+        val acquire = power.javaClass.methods.firstOrNull { it.name == "acquireWakeLock" && it.parameterTypes.size >= 7 } ?: return false
+        val token = android.os.Binder()
+        val args = arrayOf<Any?>(token, SCREEN_BRIGHT_WAKE_LOCK or ACQUIRE_CAUSES_WAKEUP, "miubridge:wake", SHELL, null, null, displayId, null)
+        acquire.invoke(power, *args.copyOf(acquire.parameterTypes.size))
+        power.javaClass.getMethod("releaseWakeLock", android.os.IBinder::class.java, Int::class.java).invoke(power, token, 0)
         return true
     }
 
@@ -137,5 +147,8 @@ internal class HelperHost(main: Handler, private val apk: String) {
         const val FLAG_NEW_TASK = 0x10000000
         const val FLAG_MULTIPLE_TASK = 0x08000000
         const val WAKE_REASON_APPLICATION = 2
+        const val SCREEN_BRIGHT_WAKE_LOCK = 0x0000000a
+        const val ACQUIRE_CAUSES_WAKEUP = 0x10000000
+        const val SHELL = "com.android.shell"
     }
 }
