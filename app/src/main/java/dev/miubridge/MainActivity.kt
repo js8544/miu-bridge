@@ -156,7 +156,7 @@ class MainActivity : ComponentActivity() {
         val running by BridgeService.running.collectAsState()
         val phone by app.phone.state.collectAsState()
         val relay by RelayClient.state.collectAsState()
-        var signedIn by remember { mutableStateOf(account.signedIn) }
+        var linked by remember { mutableStateOf(account.linked) }
         var connectSheet by remember { mutableStateOf(false) }
         var update by remember { mutableStateOf<Updates.Release?>(null) }
         LaunchedEffect(Unit) { update = Updates(this@MainActivity).newer() }
@@ -202,18 +202,18 @@ class MainActivity : ComponentActivity() {
             ) {
               if (guiding) {
                 item {
-                    Guide(account, signedIn, running, phone, resumes, ::say, onDone = ::endGuide) {
-                        signedIn = account.signedIn
+                    Guide(account, linked, running, phone, resumes, ::say, onDone = ::endGuide) {
+                        linked = account.linked
                         restartService()
                     }
                 }
               } else {
                 update?.let { release -> item { UpdateCard(release) } }
-                item { StatusCard(running, phone, relay, signedIn) }
+                item { StatusCard(running, phone, relay, linked) }
                 item { SectionTitle(stringResource(R.string.section_connect)) }
                 item {
-                    ConnectCard(account, signedIn, running, relay, ::say, onConnect = { connectSheet = true }) {
-                        signedIn = account.signedIn
+                    ConnectCard(account, linked, running, relay, ::say, onConnect = { connectSheet = true }) {
+                        linked = account.linked
                         restartService()
                     }
                 }
@@ -222,7 +222,7 @@ class MainActivity : ComponentActivity() {
                 item { SectionTitle(stringResource(R.string.section_more)) }
                 item {
                     MoreCard(account, ::say) {
-                        signedIn = account.signedIn
+                        linked = account.linked
                         restartService()
                     }
                 }
@@ -253,7 +253,7 @@ class MainActivity : ComponentActivity() {
            }
           }
         }
-        if (connectSheet) ConnectSheet(account, signedIn, ::say) { connectSheet = false }
+        if (connectSheet) ConnectSheet(account, linked, ::say) { connectSheet = false }
         // Owners who set up before the notice existed (or before it last changed) see it once here.
         val consent = remember { dev.miubridge.core.AppConsent(this) }
         var noticePending by remember { mutableStateOf(!consent.acceptedNotice) }
@@ -293,7 +293,7 @@ class MainActivity : ComponentActivity() {
     private class Look(val title: String, val body: String, val icon: ImageVector, val container: Color, val content: Color)
 
     @Composable
-    private fun StatusCard(running: Boolean, phone: PhoneState, relay: RelayClient.State, signedIn: Boolean) {
+    private fun StatusCard(running: Boolean, phone: PhoneState, relay: RelayClient.State, linked: Boolean) {
         val scheme = MaterialTheme.colorScheme
         val scope = rememberCoroutineScope()
         var watching by remember { mutableStateOf(false) }
@@ -301,7 +301,7 @@ class MainActivity : ComponentActivity() {
         val look = when {
             !running -> Look(stringResource(R.string.status_stopped_title), stringResource(R.string.status_stopped_body), Icons.Filled.PlayArrow, scheme.surfaceContainerHigh, scheme.onSurface)
             !phone.shellReady -> Look(stringResource(R.string.status_preparing_title), phone.message.ifBlank { stringResource(R.string.status_preparing_body) }, Icons.Filled.Refresh, scheme.secondaryContainer, scheme.onSecondaryContainer)
-            !signedIn -> Look(stringResource(R.string.status_local_title), if (phone.resting) phone.message else stringResource(R.string.status_local_body), Icons.Filled.CheckCircle, scheme.primaryContainer, scheme.onPrimaryContainer)
+            !linked -> Look(stringResource(R.string.status_local_title), if (phone.resting) phone.message else stringResource(R.string.status_local_body), Icons.Filled.CheckCircle, scheme.primaryContainer, scheme.onPrimaryContainer)
             !relay.connected -> Look(stringResource(R.string.status_remote_down_title), relay.message.ifBlank { stringResource(R.string.remote_connecting) }, Icons.Filled.Warning, scheme.errorContainer, scheme.onErrorContainer)
             else -> Look(stringResource(R.string.status_ready_title), if (phone.resting) phone.message else stringResource(R.string.status_ready_body), Icons.Filled.CheckCircle, scheme.primaryContainer, scheme.onPrimaryContainer)
         }
@@ -403,7 +403,7 @@ class MainActivity : ComponentActivity() {
      */
     @Composable
     private fun Guide(
-        account: Account, signedIn: Boolean, running: Boolean, phone: PhoneState, resumes: Int,
+        account: Account, linked: Boolean, running: Boolean, phone: PhoneState, resumes: Int,
         say: (String) -> Unit, onDone: () -> Unit, onAccountChanged: () -> Unit,
     ) {
         val scope = rememberCoroutineScope()
@@ -414,7 +414,7 @@ class MainActivity : ComponentActivity() {
         fun setPreparedElsewhere(v: Boolean) { preparedElsewhere = v; ui.edit().putBoolean("prepared_elsewhere", v).apply() }
         var handedOver by remember { mutableStateOf(ui.getBoolean("handed_over", false)) }
         fun setHandedOver(v: Boolean) { handedOver = v; ui.edit().putBoolean("handed_over", v).apply() }
-        // The agent runs on the owner's own computer on this Wi-Fi: the one case that needs no account.
+        // The agent runs on the owner's own computer on this Wi-Fi: no relay needed.
         var lanOnly by remember { mutableStateOf(ui.getBoolean("lan_only", false)) }
         fun setLanOnly(v: Boolean) { lanOnly = v; ui.edit().putBoolean("lan_only", v).apply() }
         val ready = running && phone.shellReady
@@ -422,7 +422,7 @@ class MainActivity : ComponentActivity() {
         var noticed by remember { mutableStateOf(consent.acceptedNotice) }
         val step = when {
             !noticed -> 0
-            !signedIn && !lanOnly -> 1
+            !linked && !lanOnly -> 1
             !ready -> 2
             !handedOver -> 3
             else -> 4
@@ -459,33 +459,43 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 1 -> {
-                    // Asked in the owner's terms: where the agent runs decides whether anything has to be signed up for.
-                    var cloud by remember { mutableStateOf(false) }
+                    // Asked in the owner's terms. Neither answer needs an account: a cloud agent only needs
+                    // this phone on a relay, which the phone arranges by itself.
                     var relayUrl by remember { mutableStateOf(account.baseUrl) }
-                    if (!cloud) GuideStep(R.string.guide_where_title, R.string.guide_where_body) {
+                    var linking by remember { mutableStateOf(false) }
+                    var failed by remember { mutableStateOf<String?>(null) }
+                    var ownRelay by remember { mutableStateOf(false) }
+                    val hosted = relayUrl == Account.DEFAULT_RELAY_URL
+                    GuideStep(R.string.guide_where_title, R.string.guide_where_body) {
                         WhereCard(AppIcons.Wifi, R.string.where_computer_title, R.string.where_computer_body, R.string.where_computer_note) { setLanOnly(true) }
                         Spacer(Modifier.height(12.dp))
-                        WhereCard(AppIcons.Cloud, R.string.where_cloud_title, R.string.where_cloud_body, R.string.where_cloud_note) { cloud = true }
+                        WhereCard(AppIcons.Cloud, R.string.where_cloud_title, R.string.where_cloud_body, R.string.where_cloud_note) {
+                            if (linking) return@WhereCard
+                            linking = true; failed = null
+                            scope.launch {
+                                failed = account.link()
+                                linking = false
+                                onAccountChanged()
+                            }
+                        }
+                        if (linking) Text(
+                            stringResource(R.string.remote_connecting), style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp),
+                        )
+                        failed?.let {
+                            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp))
+                        }
                         Text(
                             stringResource(R.string.where_both), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp),
                         )
-                    } else GuideStep(R.string.guide_relay_title, R.string.guide_relay_body) {
-                        var ownRelay by remember { mutableStateOf(false) }
-                        val hosted = relayUrl == Account.DEFAULT_RELAY_URL
-                        Text(
-                            if (hosted) stringResource(R.string.relay_hosted_title) else stringResource(R.string.relay_own_title, relayUrl.substringAfter("://")),
-                            style = MaterialTheme.typography.titleMedium,
+                        if (!hosted) Text(
+                            stringResource(R.string.relay_own_title, relayUrl.substringAfter("://")), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp),
                         )
-                        Text(
-                            stringResource(if (hosted) R.string.relay_hosted_body else R.string.relay_own_body), style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                        )
-                        SignInForm(account, say, onAccountChanged, Modifier, showTitle = false)
-                        TextButton(onClick = { ownRelay = true }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 16.dp)) {
+                        TextButton(onClick = { ownRelay = true }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)) {
                             Text(stringResource(if (hosted) R.string.relay_use_own else R.string.relay_change))
                         }
-                        TextButton(onClick = { cloud = false }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.guide_back)) }
                         if (ownRelay) {
                             var draft by remember { mutableStateOf(if (hosted) "" else relayUrl) }
                             var invalid by remember { mutableStateOf(false) }
@@ -605,7 +615,7 @@ class MainActivity : ComponentActivity() {
                 }
                 3 -> {
                     val token = (application as App).token.value
-                    val remote = signedIn
+                    val remote = linked
                     val url = if (remote) account.mcpUrl ?: mcpUrl() else mcpUrl()
                     val details = connectionDetails(url, token, account.baseUrl)
                     val copiedGuide = stringResource(R.string.copied_guide)
@@ -889,7 +899,7 @@ class MainActivity : ComponentActivity() {
     /** How to hand this phone to an agent, and the account that makes it reachable from other networks. */
     @Composable
     private fun ConnectCard(
-        account: Account, signedIn: Boolean, running: Boolean, relay: RelayClient.State,
+        account: Account, linked: Boolean, running: Boolean, relay: RelayClient.State,
         say: (String) -> Unit, onConnect: () -> Unit, onAccountChanged: () -> Unit,
     ) {
         val scope = rememberCoroutineScope()
@@ -907,8 +917,24 @@ class MainActivity : ComponentActivity() {
                 }
             }
             HorizontalDivider(Modifier.padding(horizontal = 20.dp))
-            if (!signedIn) {
-                SignInForm(account, say, onAccountChanged)
+            if (!linked) {
+                var linking by remember { mutableStateOf(false) }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.remote_title)) },
+                    supportingContent = { Text(stringResource(if (linking) R.string.remote_connecting else R.string.remote_off_body)) },
+                    leadingContent = { Icon(AppIcons.Cloud, null) },
+                    trailingContent = {
+                        TextButton(enabled = !linking, onClick = {
+                            linking = true
+                            scope.launch {
+                                account.link()?.let(say)
+                                linking = false
+                                onAccountChanged()
+                            }
+                        }) { Text(stringResource(R.string.action_turn_on)) }
+                    },
+                    colors = clearItem(),
+                )
             } else {
                 var confirmSignOut by remember { mutableStateOf(false) }
                 val email = account.email.orEmpty()
@@ -921,7 +947,7 @@ class MainActivity : ComponentActivity() {
                 }
                 LaunchedEffect(email, relay.connected) { usage = account.usage() }
                 ListItem(
-                    headlineContent = { Text(email) },
+                    headlineContent = { Text(email.ifEmpty { stringResource(R.string.remote_title) }) },
                     supportingContent = {
                         Column {
                             Text(
@@ -945,10 +971,11 @@ class MainActivity : ComponentActivity() {
                     },
                     leadingContent = {
                         Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
-                            Text(email.take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.titleMedium)
+                            if (email.isEmpty()) Icon(AppIcons.Cloud, null, tint = MaterialTheme.colorScheme.onPrimary)
+                            else Text(email.take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.titleMedium)
                         }
                     },
-                    trailingContent = { TextButton(onClick = { confirmSignOut = true }) { Text(stringResource(R.string.action_sign_out)) } },
+                    trailingContent = { TextButton(onClick = { confirmSignOut = true }) { Text(stringResource(R.string.action_turn_off)) } },
                     colors = clearItem(),
                 )
                 if (confirmSignOut) AlertDialog(
@@ -956,7 +983,7 @@ class MainActivity : ComponentActivity() {
                     title = { Text(stringResource(R.string.signout_title)) },
                     text = { Text(stringResource(R.string.signout_body)) },
                     confirmButton = {
-                        TextButton(onClick = { confirmSignOut = false; scope.launch { account.signOut(); onAccountChanged() } }) { Text(stringResource(R.string.action_sign_out)) }
+                        TextButton(onClick = { confirmSignOut = false; scope.launch { account.unlink(); onAccountChanged() } }) { Text(stringResource(R.string.action_turn_off)) }
                     },
                     dismissButton = { TextButton(onClick = { confirmSignOut = false }) { Text(stringResource(R.string.action_cancel)) } },
                 )
@@ -1087,9 +1114,9 @@ class MainActivity : ComponentActivity() {
     /** The owner picks how the agent reaches the phone, then copies the full hand-off, and the token alone when an agent's credential store asks for it. */
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
-    private fun ConnectSheet(account: Account, signedIn: Boolean, say: (String) -> Unit, onDismiss: () -> Unit) {
+    private fun ConnectSheet(account: Account, linked: Boolean, say: (String) -> Unit, onDismiss: () -> Unit) {
         val token = (application as App).token.value
-        var remote by remember { mutableStateOf(signedIn) }
+        var remote by remember { mutableStateOf(linked) }
         val url = if (remote) account.mcpUrl ?: mcpUrl() else mcpUrl()
         val copiedGuide = stringResource(R.string.copied_guide)
         ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -1101,14 +1128,14 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
                 )
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    SegmentedButton(selected = remote, onClick = { remote = true }, enabled = signedIn, shape = SegmentedButtonDefaults.itemShape(0, 2)) {
+                    SegmentedButton(selected = remote, onClick = { remote = true }, enabled = linked, shape = SegmentedButtonDefaults.itemShape(0, 2)) {
                         Text(stringResource(R.string.route_remote))
                     }
                     SegmentedButton(selected = !remote, onClick = { remote = false }, shape = SegmentedButtonDefaults.itemShape(1, 2)) {
                         Text(stringResource(R.string.route_lan))
                     }
                 }
-                if (!signedIn) Text(
+                if (!linked) Text(
                     stringResource(R.string.route_remote_need_login),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),

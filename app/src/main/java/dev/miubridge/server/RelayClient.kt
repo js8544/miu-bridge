@@ -41,7 +41,7 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
         if (scope != null) return
         val deviceId = account.deviceId
         val deviceKey = account.deviceKey
-        if (!account.signedIn || deviceId == null || deviceKey == null) {
+        if (deviceId == null || deviceKey == null) {
             _state.value = State(false, context.getString(R.string.relay_signed_out))
             return
         }

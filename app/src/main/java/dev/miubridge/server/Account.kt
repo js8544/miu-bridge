@@ -13,9 +13,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
 /**
- * The owner's relay account. Signing in registers this phone as a device and stores the device id
- * and key the relay connection uses; signing in again on the same phone keeps the id, so the MCP URL
- * already given to agents keeps working.
+ * This phone's place on the relay: a device id and key, which the phone gets by naming itself, with
+ * no account. Doing it again on the same phone keeps the id, so the MCP URL already given to agents
+ * keeps working. Signing in with an email remains for a phone that already did, and for a paid plan.
  */
 class Account(private val context: Context) {
     private val prefs = context.getSharedPreferences("relay", Context.MODE_PRIVATE)
@@ -33,14 +33,14 @@ class Account(private val context: Context) {
     val usesDefaultRelay: Boolean get() = baseUrl == DEFAULT_RELAY_URL
 
     /**
-     * Points the app at another relay ([url] blank for the hosted one). An account and device belong
-     * to one relay, so this signs the phone out and forgets its device id. Returns false when [url]
+     * Points the app at another relay ([url] blank for the hosted one). A device belongs to one
+     * relay, so this takes the phone off the current one and forgets its device id. Returns false when [url]
      * is not an http(s) address.
      */
     suspend fun useRelay(url: String): Boolean {
         val next = relayAddress(url, DEFAULT_RELAY_URL) ?: return false
         if (next == baseUrl) return true
-        signOut()
+        unlink()
         prefs.edit().remove("device_id").apply {
             if (next == DEFAULT_RELAY_URL) remove("relay_url") else putString("relay_url", next)
         }.apply()
@@ -49,8 +49,34 @@ class Account(private val context: Context) {
     val email: String? get() = prefs.getString("email", null)
     val deviceId: String? get() = prefs.getString("device_id", null)
     val deviceKey: String? get() = prefs.getString("device_key", null)
-    val signedIn: Boolean get() = prefs.getString("session", null) != null && deviceKey != null
-    val mcpUrl: String? get() = deviceId?.takeIf { signedIn }?.let { "$baseUrl/d/$it/mcp" }
+    /** On the relay: agents on other networks can reach this phone. */
+    val linked: Boolean get() = deviceId != null && deviceKey != null
+    val mcpUrl: String? get() = deviceId?.takeIf { linked }?.let { "$baseUrl/d/$it/mcp" }
+
+    /**
+     * Puts this phone on the relay, without an account. The relay counts a phone's monthly use under
+     * an id only this app on this phone has (Android gives each app its own), sent as a hash, so
+     * clearing the app's data does not make it a new phone. Returns an error message, or null on success.
+     */
+    suspend fun link(): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("name", "${Build.MANUFACTURER} ${Build.MODEL}").put("hardware", hardware())
+            val device = try { post("/api/phones", body) } catch (e: java.io.IOException) { post("/api/phones", body) }
+            prefs.edit()
+                .putString("device_id", device.getString("deviceId"))
+                .putString("device_key", device.getString("deviceKey"))
+                .apply()
+            null
+        }.getOrElse { message(it) }
+    }
+
+    private fun hardware(): String {
+        val id = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            ?: prefs.getString("install", null)
+            ?: java.util.UUID.randomUUID().toString().also { prefs.edit().putString("install", it).apply() }
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest("miubridge:$id".toByteArray())
+        return android.util.Base64.encodeToString(hash, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+    }
 
     /** What came of asking for a code: a [message] to show if it did not plainly succeed, and whether a code may be on its way. */
     class Sent(val message: String?, val codeMayArrive: Boolean)
@@ -95,21 +121,22 @@ class Account(private val context: Context) {
     /** This month's metered remote tool calls: [limit] null means unlimited. */
     data class Usage(val used: Int, val limit: Int?)
 
-    /** The account's usage this month, or null when signed out or the relay cannot be reached. */
+    /** This phone's usage this month, or null when it is not on the relay or the relay cannot be reached. */
     suspend fun usage(): Usage? = withContext(Dispatchers.IO) {
-        val session = prefs.getString("session", null) ?: return@withContext null
+        val id = deviceId ?: return@withContext null
+        val key = deviceKey ?: return@withContext null
         runCatching {
-            val req = Request.Builder().url("$baseUrl/api/me").header("Authorization", "Bearer $session").build()
+            val req = Request.Builder().url("$baseUrl/d/$id/usage").header("X-Device-Key", key).build()
             http.newCall(req).execute().use { res ->
                 if (!res.isSuccessful) return@use null
-                val u = JSONObject(res.body?.string().orEmpty()).optJSONObject("usage") ?: return@use null
+                val u = JSONObject(res.body?.string().orEmpty())
                 Usage(u.optInt("used"), if (u.isNull("limit")) null else u.optInt("limit"))
             }
         }.getOrNull()
     }
 
-    /** Signs out. The device id is kept so signing in again restores the same MCP URL. */
-    suspend fun signOut() = withContext(Dispatchers.IO) {
+    /** Takes this phone off the relay (and signs out, if it was signed in). Linking again restores the same MCP URL. */
+    suspend fun unlink() = withContext(Dispatchers.IO) {
         val session = prefs.getString("session", null)
         prefs.edit().remove("session").remove("device_key").remove("email").apply()
         if (session != null) runCatching { post("/api/logout", JSONObject(), session) }

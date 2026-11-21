@@ -74,7 +74,7 @@ Failures raise `PhoneError`: the message says what to do, and `.code` is stable 
 | `wait_timeout` | `wait()` ran out of time. |
 | `timeout`, `relay_timeout` | No answer in time; the action may or may not have happened. |
 | `paced` | Too many screens of one app in a row; stop in that app for now. |
-| `quota_exceeded` | The account's monthly allowance of remote calls is used up. Only through the relay; on the phone's own Wi-Fi there is no limit. |
+| `quota_exceeded` | The phone's monthly allowance of remote calls is used up. Only through the relay; on the phone's own Wi-Fi there is no limit. |
 | `blocked_app`, `not_installed`, `on_main_display` | The app cannot be opened here. |
 | `phone_offline`, `unreachable`, `unauthorized` | The phone is not connected; the network failed; the token is wrong. |
 | `bad_request`, `unknown_tool`, `script_error`, `failed` | The call itself was wrong, or anything else. A script stopped by a failed tool call carries that call's code. |

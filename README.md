@@ -22,10 +22,10 @@ await phone.tap("text=Wi-Fi");
 
 ## What you should know
 
-- **Same Wi-Fi needs no account and no server.** From other networks, sign in and traffic goes
+- **Same Wi-Fi needs no account and no server.** From other networks, turn on remote access (no sign-up) and traffic goes
   through a relay. The relay forwards and does not store what passes through; you can
   [run your own](relay/) and point the app at it. The hosted relay is free for 1,000 remote tool
-  calls per account per month; same Wi-Fi is never counted, and your own relay sets its own allowance.
+  calls per phone per month; same Wi-Fi is never counted, and your own relay sets its own allowance.
 - **The token is the key to your phone.** Give it only to agents you trust.
 - Payment and banking apps are refused. Payments, sign-ins and verifications are handed back to you.
 - Automating an app may break that app's terms. That is your call and your responsibility.
