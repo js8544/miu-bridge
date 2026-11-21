@@ -39,6 +39,7 @@ internal class HelperHost(main: Handler, private val apk: String) {
             val id = screen.ensure(r.getInt("width"), r.getInt("height"), r.getInt("dpi"))
             ok().put("display", id).put("trusted", screen.trusted).put("width", screen.width).put("height", screen.height).put("dpi", screen.dpi) to null
         }
+        "wake" -> ok().put("woke", wake(display())) to null
         "screenshot" -> {
             val shot = screen.screenshot(r.optInt("maxWidth", 720), r.optInt("quality", 70))
             ok().put("bin", true).put("width", shot.width).put("height", shot.height) to shot.jpeg
@@ -70,6 +71,11 @@ internal class HelperHost(main: Handler, private val apk: String) {
             tasks.moveToDisplay(task.id, display())
             handedOff = -1
             ok().put("package", task.packages.firstOrNull()).put("task", task.id) to null
+        }
+        // The app the owner still holds from "handoff", if it is still open on their screen.
+        "handed_off" -> {
+            val task = tasks.list().firstOrNull { it.id == handedOff && it.displayId != display() }
+            ok().put("package", task?.packages?.firstOrNull() ?: JSONObject.NULL) to null
         }
         "return_task" -> {
             tasks.moveToDisplay(r.getInt("task"), 0)
@@ -111,6 +117,21 @@ internal class HelperHost(main: Handler, private val apk: String) {
         return ok().put("package", top?.packages?.firstOrNull()).put("onMainDisplay", strayed)
     }
 
+    /**
+     * Wakes the background display's own power group, leaving the phone's screen as it is. Android puts
+     * that group to sleep along with the phone; asleep, it draws nothing: screenshots are black and a
+     * launched app never shows. False where the system has no per-display wake (before Android 14).
+     */
+    private fun wake(displayId: Int): Boolean {
+        val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, "power")
+        val power = Class.forName("android.os.IPowerManager\$Stub").getMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
+        val wakeUp = runCatching {
+            power.javaClass.getMethod("wakeUpWithDisplayId", Long::class.java, Int::class.java, String::class.java, String::class.java, Int::class.java)
+        }.getOrNull() ?: return false
+        wakeUp.invoke(power, android.os.SystemClock.uptimeMillis(), WAKE_REASON_APPLICATION, "miubridge", "com.android.shell", displayId)
+        return true
+    }
+
     private fun display(): Int = screen.displayId.takeIf { it > 0 } ?: throw HelperFailure("background display not created")
 
     private fun ok() = JSONObject().put("ok", true)
@@ -120,5 +141,6 @@ internal class HelperHost(main: Handler, private val apk: String) {
     private companion object {
         const val FLAG_NEW_TASK = 0x10000000
         const val FLAG_MULTIPLE_TASK = 0x08000000
+        const val WAKE_REASON_APPLICATION = 2
     }
 }
