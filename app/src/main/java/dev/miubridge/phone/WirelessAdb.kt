@@ -61,13 +61,18 @@ object WirelessAdb {
                 if (left <= 0) return null
                 val service = found.poll(left, TimeUnit.MILLISECONDS) ?: return null
                 val resolved = resolve(nsd, service, 3_000) ?: continue
-                // Other phones on the same Wi-Fi advertise too; only our own adbd will do.
-                if (resolved.host?.hostAddress in local) return resolved.port
+                // Other phones on the same Wi-Fi advertise too; only our own adbd will do. And adbd can leave
+                // an earlier port advertised after it moved to a new one, so only a port that answers counts.
+                if (resolved.host?.hostAddress in local && listening(resolved.port)) return resolved.port
             }
         } finally {
             runCatching { nsd.stopServiceDiscovery(listener) }
         }
     }
+
+    private fun listening(port: Int): Boolean = runCatching {
+        java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 1_000) }
+    }.isSuccess
 
     @Suppress("DEPRECATION") // resolveService is the call that exists on every Android 11+ release
     private fun resolve(nsd: NsdManager, service: NsdServiceInfo, timeoutMs: Long): NsdServiceInfo? {
