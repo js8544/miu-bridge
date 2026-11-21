@@ -72,11 +72,6 @@ internal class HelperHost(main: Handler, private val apk: String) {
             handedOff = -1
             ok().put("package", task.packages.firstOrNull()).put("task", task.id) to null
         }
-        // The app the owner still holds from "handoff", if it is still open on their screen.
-        "handed_off" -> {
-            val task = tasks.list().firstOrNull { it.id == handedOff && it.displayId != display() }
-            ok().put("package", task?.packages?.firstOrNull() ?: JSONObject.NULL) to null
-        }
         "return_task" -> {
             tasks.moveToDisplay(r.getInt("task"), 0)
             handedOff = r.getInt("task")
