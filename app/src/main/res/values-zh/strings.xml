@@ -35,9 +35,9 @@
     <string name="guide_welcome_label">开始之前</string>
     <string name="guide0_title">三件事，大约三分钟</string>
     <string name="guide0_body">做完以后，你的 AI agent 就能替你打开和操作这台手机上的 app。它用的是一块你看不见的屏，不影响你自己用手机。</string>
-    <string name="guide0_one">选你想让哪个 agent 用这台手机</string>
-    <string name="guide0_two">给这台手机开一个权限</string>
-    <string name="guide0_three">把一段话发给你的 agent</string>
+    <string name="guide0_one">给这台手机开一个权限</string>
+    <string name="guide0_two">把一段话发给你的 agent</string>
+    <string name="guide0_three">让它试着做一件事</string>
     <string name="guide0_risks">先知道这三点</string>
     <string name="guide0_start">我了解了，开始</string>
     <string name="guide_perm_title">让 Miu Bridge 能操作别的 app</string>
