@@ -95,7 +95,12 @@ internal object PhoneSpecs {
         ),
         "phone_handoff" to CommandSpec(
             "Move the background display's top app to the owner's main screen so the owner can take over " +
-                "(payment, login, face or SMS verification, anything irreversible). The agent loses that app afterwards.",
+                "(payment, login, face or SMS verification, anything irreversible). The agent loses that app until phone_takeback.",
+        ),
+        "phone_takeback" to CommandSpec(
+            "Bring the app given to the owner by phone_handoff back to the background display, exactly as the owner left it " +
+                "(same screens, same state), and return what it shows. Call it once the owner says they are done. " +
+                "Opening the app again instead would start a second copy from its home page. Only the handed-off app can be taken back.",
         ),
     )
 
@@ -138,6 +143,6 @@ internal object PhoneSpecs {
 
         Safety:
         - Do not do irreversible things: no paying, transferring money, placing orders, sending money-related messages, deleting data, or changing security settings.
-        - Payment and banking apps are blocked. For payment, login, face/SMS verification, or anything that needs the owner, call `phone_handoff` and tell the owner what is waiting.
+        - Payment and banking apps are blocked. For payment, login, face/SMS verification, or anything that needs the owner, call `phone_handoff` and tell the owner what is waiting. When the owner says they are done, `phone_takeback` returns the same app to you where they left it; do not open it again.
     """.trimIndent()
 }

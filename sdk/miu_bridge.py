@@ -285,6 +285,10 @@ class Phone:
         """Moves the app to the owner's own screen: for payment, login, verification, anything irreversible."""
         return self.call("phone_handoff")[0]
 
+    def takeback(self):
+        """Brings the handed-off app back as the owner left it, once they say they are done. Returns its Screen."""
+        return self._screen("phone_takeback")
+
     def script(self, code):
         """Runs JavaScript on the phone that chains the tools in one request; returns what it printed."""
         return self.call("phone_script", code=code)[0].get("output", "")

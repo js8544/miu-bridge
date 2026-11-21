@@ -53,6 +53,7 @@ console.log(screen.texts());
 | `key("back")` | `key("back")` | back, enter, home. |
 | `wait(target, state, timeout_ms)` | `wait(target, {state, timeoutMs})` | Wait for an element to appear or go. |
 | `handoff()` | `handoff()` | Give the app to the owner (payment, login, verification). |
+| `takeback()` | `takeback()` | Take that app back as the owner left it, once they say they are done. |
 | `script(js)` | `script(js)` | Run steps on the phone in one request. |
 | `notes()`, `read_notes(name)`, `learn(...)`, `forget(...)` | `notes()`, `readNotes(name)`, `learn(...)`, `forget(...)` | What agents have learned about apps on this phone. |
 

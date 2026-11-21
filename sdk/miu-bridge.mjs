@@ -164,6 +164,8 @@ export class Phone {
   key(key, opts) { return this.#screen("phone_key", { key }, opts); }
   /** Moves the app to the owner's own screen: for payment, login, verification, anything irreversible. */
   async handoff() { return (await this.call("phone_handoff")).data; }
+  /** Brings the handed-off app back as the owner left it, once they say they are done. */
+  async takeback() { return this.#screen("phone_takeback", {}); }
   /** Runs JavaScript on the phone that chains the tools in one request; returns what it printed. */
   async script(code) { return (await this.call("phone_script", { code })).data.output ?? ""; }
 

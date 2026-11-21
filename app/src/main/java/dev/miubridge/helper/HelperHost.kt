@@ -30,6 +30,9 @@ internal class HelperHost(main: Handler, private val apk: String) {
 
     fun shutdown() = screen.release()
 
+    /** The task last given to the owner by "handoff", or -1. */
+    private var handedOff = -1
+
     private fun dispatch(op: String, r: JSONObject): Pair<JSONObject, ByteArray?> = when (op) {
         "hello" -> ok().put("apk", apk).put("pid", android.os.Process.myPid()).put("display", screen.displayId) to null
         "display" -> {
@@ -56,7 +59,22 @@ internal class HelperHost(main: Handler, private val apk: String) {
         "handoff" -> {
             val top = tasks.list().firstOrNull { it.displayId == display() } ?: throw HelperFailure("nothing is open on the background display")
             tasks.moveToDisplay(top.id, 0)
+            handedOff = top.id
             ok().put("package", top.packages.firstOrNull()) to null
+        }
+        // The reverse of handoff: the very task that was given to the owner comes back as they left
+        // it. Only that task: nothing else is ever pulled off the owner's screen.
+        "takeback" -> {
+            val task = tasks.list().firstOrNull { it.id == handedOff && it.displayId != display() }
+                ?: throw HelperFailure("no handed-off app is waiting on the owner's screen")
+            tasks.moveToDisplay(task.id, display())
+            handedOff = -1
+            ok().put("package", task.packages.firstOrNull()).put("task", task.id) to null
+        }
+        "return_task" -> {
+            tasks.moveToDisplay(r.getInt("task"), 0)
+            handedOff = r.getInt("task")
+            ok() to null
         }
         "clear" -> {
             val d = display()

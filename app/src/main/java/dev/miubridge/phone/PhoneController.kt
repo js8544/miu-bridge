@@ -200,6 +200,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         "phone_key" -> key(params.str("key"))
         "phone_open_url" -> openUrl(params.str("url"))
         "phone_handoff" -> handoff()
+        "phone_takeback" -> takeback()
         "phone_wait" -> waitFor(params)
         else -> CommandResult.Error("unknown command $name", "unknown_tool")
     }
@@ -421,8 +422,26 @@ class PhoneController(private val context: Context) : CommandHandler {
         _state.update { it.copy(message = context.getString(R.string.phone_handed_off, pkg.ifBlank { context.getString(R.string.phone_the_app) })) }
         lastSnapshot = null
         return CommandResult.Ok(
-            JSONObject().put("moved", pkg).put("note", "The app is now on the owner's main screen; tell the owner what needs their attention."),
+            JSONObject().put("moved", pkg).put("note", "The app is now on the owner's main screen; tell the owner what needs their attention. When they say they are done, phone_takeback brings it back as they left it."),
         )
+    }
+
+    /** Brings the app given to the owner by [handoff] back to the background display, in the state the owner left it. */
+    private suspend fun takeback(): CommandResult {
+        requireScreen()
+        val before = lastSnapshot
+        val reply = try {
+            withHelper { it.call("takeback") }
+        } catch (e: HelperError) {
+            return CommandResult.Error("Nothing to take back: no app handed off by phone_handoff is on the owner's screen. Launch the app instead.", "not_found")
+        }
+        val pkg = reply.json.optString("package")
+        // The owner may have ended up somewhere agents must not act: give it straight back.
+        if (AppPolicy.isBlocked(pkg)) {
+            withHelper { it.call("return_task", JSONObject().put("task", reply.json.getInt("task"))) }
+            return blocked(pkg)
+        }
+        return CommandResult.Ok(snapshot("took $pkg back from the owner's screen, as they left it", settled(before)))
     }
 
     private fun blocked(pkg: String) = CommandResult.Error(
