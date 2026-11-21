@@ -414,15 +414,11 @@ class MainActivity : ComponentActivity() {
         fun setPreparedElsewhere(v: Boolean) { preparedElsewhere = v; ui.edit().putBoolean("prepared_elsewhere", v).apply() }
         var handedOver by remember { mutableStateOf(ui.getBoolean("handed_over", false)) }
         fun setHandedOver(v: Boolean) { handedOver = v; ui.edit().putBoolean("handed_over", v).apply() }
-        // The agent runs on the owner's own computer on this Wi-Fi: no relay needed.
-        var lanOnly by remember { mutableStateOf(ui.getBoolean("lan_only", false)) }
-        fun setLanOnly(v: Boolean) { lanOnly = v; ui.edit().putBoolean("lan_only", v).apply() }
         val ready = running && phone.shellReady
         val consent = remember { dev.miubridge.core.AppConsent(this) }
         var noticed by remember { mutableStateOf(consent.acceptedNotice) }
         val step = when {
             !noticed -> 0
-            !linked && !lanOnly -> 1
             !ready -> 2
             !handedOver -> 3
             else -> 4
@@ -431,7 +427,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (step == 0) stringResource(R.string.guide_welcome_label) else stringResource(R.string.guide_progress, step.coerceAtMost(3), 3),
+                    if (step == 0) stringResource(R.string.guide_welcome_label) else stringResource(R.string.guide_progress, (step - 1).coerceIn(1, 3), 3),
                     style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onDone) { Text(stringResource(R.string.guide_skip)) }
@@ -456,82 +452,6 @@ class MainActivity : ComponentActivity() {
                     RiskPoints()
                     Button(onClick = { consent.acceptNotice(); noticed = true }, modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
                         Text(stringResource(R.string.guide0_start))
-                    }
-                }
-                1 -> {
-                    // Asked in the owner's terms. Neither answer needs an account: a cloud agent only needs
-                    // this phone on a relay, which the phone arranges by itself.
-                    var relayUrl by remember { mutableStateOf(account.baseUrl) }
-                    var linking by remember { mutableStateOf(false) }
-                    var failed by remember { mutableStateOf<String?>(null) }
-                    var ownRelay by remember { mutableStateOf(false) }
-                    val hosted = relayUrl == Account.DEFAULT_RELAY_URL
-                    GuideStep(R.string.guide_where_title, R.string.guide_where_body) {
-                        WhereCard(AppIcons.Wifi, R.string.where_computer_title, R.string.where_computer_body, R.string.where_computer_note) { setLanOnly(true) }
-                        Spacer(Modifier.height(12.dp))
-                        WhereCard(AppIcons.Cloud, R.string.where_cloud_title, R.string.where_cloud_body, R.string.where_cloud_note) {
-                            if (linking) return@WhereCard
-                            linking = true; failed = null
-                            scope.launch {
-                                failed = account.link()
-                                linking = false
-                                onAccountChanged()
-                            }
-                        }
-                        if (linking) Text(
-                            stringResource(R.string.remote_connecting), style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp),
-                        )
-                        failed?.let {
-                            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp))
-                        }
-                        Text(
-                            stringResource(R.string.where_both), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp),
-                        )
-                        if (!hosted) Text(
-                            stringResource(R.string.relay_own_title, relayUrl.substringAfter("://")), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp),
-                        )
-                        TextButton(onClick = { ownRelay = true }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)) {
-                            Text(stringResource(if (hosted) R.string.relay_use_own else R.string.relay_change))
-                        }
-                        if (ownRelay) {
-                            var draft by remember { mutableStateOf(if (hosted) "" else relayUrl) }
-                            var invalid by remember { mutableStateOf(false) }
-                            fun apply(url: String) = scope.launch {
-                                if (!account.useRelay(url)) { invalid = true; return@launch }
-                                ownRelay = false
-                                relayUrl = account.baseUrl
-                            }
-                            AlertDialog(
-                                onDismissRequest = { ownRelay = false },
-                                icon = { Icon(AppIcons.Cloud, null) },
-                                title = { Text(stringResource(R.string.relay_own_dialog_title)) },
-                                text = {
-                                    Column {
-                                        Text(stringResource(R.string.relay_own_dialog_body))
-                                        OutlinedTextField(
-                                            value = draft, onValueChange = { draft = it; invalid = false },
-                                            label = { Text(stringResource(R.string.relay_field)) },
-                                            placeholder = { Text("https://relay.example.com") },
-                                            isError = invalid,
-                                            supportingText = if (invalid) ({ Text(stringResource(R.string.relay_invalid)) }) else null,
-                                            singleLine = true,
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                                            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                                        )
-                                    }
-                                },
-                                confirmButton = { TextButton(onClick = { apply(draft) }) { Text(stringResource(R.string.action_save)) } },
-                                dismissButton = {
-                                    Row {
-                                        if (!hosted) TextButton(onClick = { apply("") }) { Text(stringResource(R.string.relay_use_default)) }
-                                        TextButton(onClick = { ownRelay = false }) { Text(stringResource(R.string.action_cancel)) }
-                                    }
-                                },
-                            )
-                        }
                     }
                 }
                 2 -> if (paired || preparedElsewhere) {
@@ -615,15 +535,25 @@ class MainActivity : ComponentActivity() {
                 }
                 3 -> {
                     val token = (application as App).token.value
-                    val remote = linked
-                    val url = if (remote) account.mcpUrl ?: mcpUrl() else mcpUrl()
-                    val details = connectionDetails(url, token, account.baseUrl)
+                    // The phone goes on the relay by itself, so the one text works for an agent anywhere.
+                    var linking by remember { mutableStateOf(!linked) }
+                    var failed by remember { mutableStateOf<String?>(null) }
+                    var attempt by remember { mutableStateOf(0) }
+                    LaunchedEffect(attempt) {
+                        if (account.linked) { linking = false; return@LaunchedEffect }
+                        linking = true
+                        failed = account.link()
+                        linking = false
+                        onAccountChanged()
+                    }
+                    val details = connectionDetails(lanUrl(), account.mcpUrl, token, account.baseUrl)
                     val copiedGuide = stringResource(R.string.copied_guide)
                     val shareTitle = stringResource(R.string.guide_share_title)
                     var sent by remember { mutableStateOf(false) }
-                    GuideStep(R.string.guide3_title, if (remote) R.string.guide3_body else R.string.guide3_body_lan) {
+                    GuideStep(R.string.guide3_title, R.string.guide3_body) {
                         Button(
                             onClick = { copy(details); say(copiedGuide); sent = true },
+                            enabled = !linking,
                             modifier = Modifier.fillMaxWidth(),
                             colors = if (sent) ButtonDefaults.filledTonalButtonColors() else ButtonDefaults.buttonColors(),
                         ) {
@@ -637,8 +567,20 @@ class MainActivity : ComponentActivity() {
                                 startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, details), shareTitle))
                                 sent = true
                             },
+                            enabled = !linking,
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                         ) { Text(stringResource(R.string.guide3_share)) }
+                        Text(
+                            when {
+                                linking -> stringResource(R.string.guide3_linking)
+                                linked -> stringResource(R.string.guide3_two_ways)
+                                else -> stringResource(R.string.guide3_lan_only, failed.orEmpty())
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (!linking && !linked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                        if (!linking && !linked) TextButton(onClick = { attempt++ }) { Text(stringResource(R.string.action_retry)) }
                         Text(
                             stringResource(R.string.guide3_secret), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp),
@@ -646,9 +588,6 @@ class MainActivity : ComponentActivity() {
                         CopyRow(stringResource(R.string.connect_token), "••••••••" + token.takeLast(4), token, stringResource(R.string.copied_token), say)
                         if (sent) Button(onClick = { setHandedOver(true) }, modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
                             Text(stringResource(R.string.guide3_next))
-                        }
-                        if (!remote) TextButton(onClick = { setLanOnly(false) }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)) {
-                            Text(stringResource(R.string.guide3_use_remote))
                         }
                     }
                 }
@@ -676,24 +615,6 @@ class MainActivity : ComponentActivity() {
                         else OutlinedButton(onClick = onDone, modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) { Text(stringResource(R.string.guide4_later)) }
                         TextButton(onClick = { setHandedOver(false) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(stringResource(R.string.guide_back)) }
                     }
-                }
-            }
-        }
-    }
-
-    /** One answer to "where does your agent run": what it is in the owner's words, examples, and what choosing it costs. */
-    @Composable
-    private fun WhereCard(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Int, body: Int, note: Int, onClick: () -> Unit) {
-        Surface(
-            onClick = onClick, shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
-                Column(Modifier.padding(start = 16.dp).weight(1f)) {
-                    Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                    Text(stringResource(note), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
                 }
             }
         }
@@ -1074,23 +995,42 @@ class MainActivity : ComponentActivity() {
      * agent picks MCP or scripts. An agent that keeps secrets in a credential store asks for the
      * token again on its own, which is why the sheet also offers each value separately.
      */
-    private fun connectionDetails(url: String, token: String, relay: String): String = """
-        Miu Bridge: operate apps on my Android phone, on a background display.
+    /**
+     * What an agent needs to reach this phone, wherever it runs: the address on the phone's own Wi-Fi
+     * ([lan], null without Wi-Fi) and the one through the relay ([remote], null when remote access is off).
+     */
+    private fun connectionDetails(lan: String?, remote: String?, token: String, relay: String): String {
+        val both = lan != null && remote != null
+        val where = when {
+            both -> """
+                Two addresses reach the same phone and the same tools. Use the one that fits where you run:
+                - On the same Wi-Fi as the phone (direct, fastest, not counted): $lan
+                - Anywhere else (through a relay; counted against a monthly allowance): $remote
+                If you cannot tell, try the first and fall back to the second. The Wi-Fi address changes when
+                the phone changes network; the other one stays the same.
+            """.trimIndent()
+            remote != null -> "URL: $remote"
+            else -> "URL: ${lan ?: "http://<phone-ip>:${McpServer.DEFAULT_PORT}/mcp"}\nIt works while you are on the same Wi-Fi as the phone."
+        }
+        val url = if (both) "<URL>" else remote ?: lan ?: "<URL>"
+        return """
+Miu Bridge: operate apps on my Android phone, on a background display.
 
-        URL: $url
-        Token: $token
-        Send the token as the header "Authorization: Bearer <token>". Keep it secret.
+$where
+Token: $token
+Send the token as the header "Authorization: Bearer <token>". Keep it secret.
 
-        Use it whichever way suits you; both reach the same phone and the same tools:
-        1. As an MCP server (Streamable HTTP) at the URL, with that header.
-           Claude Code: claude mcp add --transport http phone "$url" --header "Authorization: Bearer $token"
-        2. From scripts in your own sandbox, with the SDK (JavaScript or Python, no dependencies):
-           curl -fsSO $relay/sdk/miu-bridge.mjs   # or miu_bridge.py
-           export MIU_BRIDGE_URL="$url"
-           export MIU_BRIDGE_TOKEN="$token"
-           Guide: $relay/sdk/
-        If you call the URL without the SDK, send a User-Agent header that names your client.
-    """.trimIndent()
+Use it whichever way suits you; both reach the same phone and the same tools${if (both) " (<URL> is the address you chose)" else ""}:
+1. As an MCP server (Streamable HTTP) at the URL, with that header.
+   Claude Code: claude mcp add --transport http phone "$url" --header "Authorization: Bearer $token"
+2. From scripts in your own sandbox, with the SDK (JavaScript or Python, no dependencies):
+   curl -fsSO $relay/sdk/miu-bridge.mjs   # or miu_bridge.py
+   export MIU_BRIDGE_URL="$url"
+   export MIU_BRIDGE_TOKEN="$token"
+   Guide: $relay/sdk/
+If you call the URL without the SDK, send a User-Agent header that names your client.
+        """.trim()
+    }
 
     /** One value the owner copies on its own: a label, the value (or a masked form of it), a copy button. */
     @Composable
@@ -1111,37 +1051,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** The owner picks how the agent reaches the phone, then copies the full hand-off, and the token alone when an agent's credential store asks for it. */
+    /** The owner copies the full hand-off, and the token alone when an agent's credential store asks for it. */
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun ConnectSheet(account: Account, linked: Boolean, say: (String) -> Unit, onDismiss: () -> Unit) {
         val token = (application as App).token.value
-        var remote by remember { mutableStateOf(linked) }
-        val url = if (remote) account.mcpUrl ?: mcpUrl() else mcpUrl()
         val copiedGuide = stringResource(R.string.copied_guide)
         ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
                 Text(stringResource(R.string.connect_sheet_title), style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    stringResource(R.string.connect_route),
-                    style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
-                )
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    SegmentedButton(selected = remote, onClick = { remote = true }, enabled = linked, shape = SegmentedButtonDefaults.itemShape(0, 2)) {
-                        Text(stringResource(R.string.route_remote))
-                    }
-                    SegmentedButton(selected = !remote, onClick = { remote = false }, shape = SegmentedButtonDefaults.itemShape(1, 2)) {
-                        Text(stringResource(R.string.route_lan))
-                    }
-                }
-                if (!linked) Text(
-                    stringResource(R.string.route_remote_need_login),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
                 Button(
-                    onClick = { copy(connectionDetails(url, token, account.baseUrl)); say(copiedGuide) },
+                    onClick = { copy(connectionDetails(lanUrl(), account.mcpUrl.takeIf { linked }, token, account.baseUrl)); say(copiedGuide) },
                     modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
                 ) {
                     Icon(AppIcons.Copy, null, Modifier.size(18.dp))
@@ -1316,7 +1236,8 @@ class MainActivity : ComponentActivity() {
     private fun copy(text: String) =
         (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Miu Bridge", text))
 
-    private fun mcpUrl(): String = "http://${wifiIp() ?: "<phone-ip>"}:${McpServer.DEFAULT_PORT}/mcp"
+    /** This phone's address for agents on its own Wi-Fi, or null when it is not on one. */
+    private fun lanUrl(): String? = wifiIp()?.let { "http://$it:${McpServer.DEFAULT_PORT}/mcp" }
 
     private fun wifiIp(): String? = NetworkInterface.getNetworkInterfaces().toList()
         .filter { it.isUp && !it.isLoopback && (it.name.startsWith("wlan") || it.name.startsWith("eth")) }
