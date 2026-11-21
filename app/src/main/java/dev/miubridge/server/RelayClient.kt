@@ -88,7 +88,7 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
                 socket.cancel()
                 return
             }
-            if (now - keptAliveAt > 2 * BEAT_MS) socket.send("ping")
+            if (now - keptAliveAt > KEPT_ALIVE_MS) socket.send("ping")
         }
     }
 
@@ -148,8 +148,11 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
 
     companion object {
         private const val TAG = "RelayClient"
-        private const val BEAT_MS = 50_000L
-        private const val QUIET_MS = 170_000L
+        private const val BEAT_MS = 60_000L
+        /** The relay's keepalive comes every 120 s; later than this and the phone asks for a pong itself. */
+        private const val KEPT_ALIVE_MS = 150_000L
+        /** Two keepalives missed: the link is dead, however open it looks. */
+        private const val QUIET_MS = 270_000L
         private val _state = MutableStateFlow(State())
         /** One relay connection per app process; the screen shows this. */
         val state: StateFlow<State> = _state

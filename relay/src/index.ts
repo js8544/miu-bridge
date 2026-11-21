@@ -399,7 +399,8 @@ function quotaExceeded(id: unknown, usage: Usage): Response {
 type Pending = { resolve: (r: Response) => void; timer: ReturnType<typeof setTimeout> };
 type CachedUsage = Usage & { at: number };
 const USAGE_REFRESH_MS = 5 * 60_000;
-const KEEPALIVE_MS = 55_000;
+// A quiet link was measured to die, silently, between 240 and 260 s on a home line; this leaves half of that.
+const KEEPALIVE_MS = 120_000;
 /** A phone may ask for another keepalive interval, to find the longest its network lets a quiet link live. */
 const KEEPALIVE_RANGE_S = [30, 900];
 
@@ -435,7 +436,11 @@ export class Phone implements DurableObject {
     // From here on the relay keeps the link open, so the phone can sleep between requests.
     const asked = Number(request.headers.get("X-Relay-Keepalive") || 0);
     const every = asked ? Math.min(Math.max(asked, KEEPALIVE_RANGE_S[0]), KEEPALIVE_RANGE_S[1]) * 1000 : KEEPALIVE_MS;
-    this.state.waitUntil(Promise.all([this.state.storage.put("keepalive_ms", every), this.state.storage.setAlarm(Date.now() + every)]));
+    // Only an interval the phone asked for is remembered; the rest follow the relay's own.
+    this.state.waitUntil(Promise.all([
+      asked ? this.state.storage.put("keepalive_ms", every) : this.state.storage.delete("keepalive_ms"),
+      this.state.storage.setAlarm(Date.now() + every),
+    ]));
     // Where the phone came in: part of the trace of a slow call.
     this.state.waitUntil(this.state.storage.put("phone_colo", request.headers.get("X-Relay-Colo") ?? ""));
     return new Response(null, { status: 101, webSocket: pair[0] });
