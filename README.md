@@ -1,5 +1,7 @@
 # Miu Bridge
 
+English | [简体中文](README.zh-CN.md)
+
 **Let any AI agent use the apps on your Android phone, while you keep using it.**
 
 [![Latest release](https://img.shields.io/github/v/release/js8544/miu-bridge)](https://github.com/js8544/miu-bridge/releases/latest)
