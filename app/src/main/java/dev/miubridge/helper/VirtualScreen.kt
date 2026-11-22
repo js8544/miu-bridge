@@ -85,11 +85,26 @@ internal class VirtualScreen(private val main: Handler) {
         encode(image, maxWidth, quality)
     }
 
+    /**
+     * Turns the display off by taking its surface away, or back on by returning it. Off, the app on
+     * it stops being in front, as when the owner leaves an app.
+     */
+    fun turn(on: Boolean): Boolean = main.await {
+        val d = display ?: return@await false
+        if (on == !off) return@await true
+        d.surface = if (on) reader?.surface else null
+        off = !on
+        true
+    }
+
+    private var off = false // touched only on the main looper
+
     fun release() {
         runCatching {
             main.await {
                 display?.release()
                 display = null
+                off = false
                 reader?.close()
                 reader = null
                 displayId = -1

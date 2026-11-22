@@ -140,14 +140,44 @@ class PhoneController(private val context: Context) : CommandHandler {
         }
     }
 
+    private var leaving: Job? = null
+
+    /** True while the background display is asleep because [leaveAfterUse] put it so. */
+    @Volatile private var left = false
+
+    /**
+     * Once the agent has gone quiet for [LEAVE_AFTER_MS], the app on the background display stops
+     * being in front, as when the owner leaves an app: it keeps its state but no longer runs as the
+     * app on screen. The next call wakes the display and the app is back where it was.
+     */
+    private fun leaveAfterUse() {
+        leaving?.cancel()
+        leaving = scope.launch {
+            delay(LEAVE_AFTER_MS)
+            val h = helper ?: return@launch
+            left = runCatching { h.call("sleep").json.optBoolean("slept") }
+                .onFailure { Log.w(TAG, "could not put the background display to sleep: ${it.message}") }
+                .getOrDefault(false)
+        }
+    }
+
     override fun specs(): Map<String, CommandSpec> = PhoneSpecs.all
 
     override fun guideMarkdown(): String = PhoneSpecs.guide
 
-    override suspend fun invoke(name: String, params: JSONObject): CommandResult = try {
+    override suspend fun invoke(name: String, params: JSONObject): CommandResult {
         // Listing apps and asking for status touch nothing on the display, so they work in any state
         // and must not keep the owner's screen lit.
         val passive = name == "phone_apps" || name == "phone_status"
+        if (!passive) leaving?.cancel()
+        return try {
+            work(name, params, passive)
+        } finally {
+            if (!passive) leaveAfterUse()
+        }
+    }
+
+    private suspend fun work(name: String, params: JSONObject, passive: Boolean): CommandResult = try {
         if (!passive) {
             screenKeeper.touch()
             restAfterIdle()
@@ -160,6 +190,15 @@ class PhoneController(private val context: Context) : CommandHandler {
         }
         // The background display sleeps when the phone does; wake it (and only it) before working on it.
         if (!passive && name in PhoneSpecs.all) helper?.let { h -> runCatching { h.call("wake") } }
+        if (!passive && left) {
+            left = false
+            // The app comes back to the front a moment after the display wakes; reading before that sees nothing.
+            val s = screen
+            val svc = ScreenReaderService.current.value
+            if (s != null && svc != null) withTimeoutOrNull(BACK_IN_FRONT_MS) {
+                while (withContext(Dispatchers.IO) { svc.snapshot(s.id, s.width, s.height) }.refs.isEmpty()) delay(100)
+            }
+        }
         // Android drops our accessibility service when the app is updated; turn it back on.
         if (!passive && ScreenReaderService.current.value == null) {
             val h = helper
@@ -894,8 +933,10 @@ class PhoneController(private val context: Context) : CommandHandler {
         private val CHANGES_SCREEN = setOf("phone_launch", "phone_open_url", "phone_tap", "phone_long_press", "phone_key")
         /** Results of these carry the element tree, and can carry a picture with it. */
         private val RETURNS_SCREEN = setOf("phone_launch", "phone_open_url", "phone_snapshot", "phone_tap", "phone_long_press", "phone_swipe", "phone_type", "phone_key", "phone_wait")
-        /** How long a result waits for a progress indicator the action started. */
         private const val REST_AFTER_MS = 10 * 60_000L
+        private const val LEAVE_AFTER_MS = 60_000L
+        private const val BACK_IN_FRONT_MS = 2_000L
+        /** How long a result waits for a progress indicator the action started. */
         private const val LOADING_WAIT_MS = 6_000L
         /** How long an action that changed nothing is given to show its effect. */
         private const val UNCHANGED_WAIT_MS = 1_500L

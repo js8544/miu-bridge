@@ -40,6 +40,7 @@ internal class HelperHost(main: Handler, private val apk: String) {
             ok().put("display", id).put("trusted", screen.trusted).put("width", screen.width).put("height", screen.height).put("dpi", screen.dpi) to null
         }
         "wake" -> ok().put("woke", wake(display())) to null
+        "sleep" -> ok().put("slept", screen.turn(on = false)) to null
         "screenshot" -> {
             val shot = screen.screenshot(r.optInt("maxWidth", 720), r.optInt("quality", 70))
             ok().put("bin", true).put("width", shot.width).put("height", shot.height) to shot.jpeg
@@ -120,9 +121,10 @@ internal class HelperHost(main: Handler, private val apk: String) {
     /**
      * Wakes the background display's own power group, leaving the phone's screen as it is. Android puts
      * that group to sleep along with the phone; asleep, it draws nothing: screenshots are black and a
-     * launched app never shows.
+     * launched app never shows. Also turns the display back on after "sleep".
      */
     private fun wake(displayId: Int): Boolean {
+        screen.turn(on = true)
         val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, "power")
         val power = Class.forName("android.os.IPowerManager\$Stub").getMethod("asInterface", android.os.IBinder::class.java).invoke(null, binder)
         val wakeUp = runCatching {
