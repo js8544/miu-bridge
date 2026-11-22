@@ -15,8 +15,15 @@ object Awake {
     @Volatile private var lock: PowerManager.WakeLock? = null
     private val working = AtomicInteger()
     @Volatile private var heldUntil = 0L
+    @Volatile private var servedUntil = 0L
+    private val requests = AtomicInteger()
+    @Volatile private var app: Context? = null
+
+    /** An agent's request is being answered, or one was a moment ago: the next is likely soon. */
+    val serving: Boolean get() = requests.get() > 0 || SystemClock.elapsedRealtime() < servedUntil
 
     fun init(context: Context) {
+        app = context.applicationContext
         if (lock != null) return
         lock = context.applicationContext.getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "miubridge:work").apply { setReferenceCounted(false) }
@@ -29,13 +36,18 @@ object Awake {
         if (working.get() == 0 && until > heldUntil) { heldUntil = until; lock?.acquire(ms) }
     }
 
-    /** Stay awake for the whole of [block], then for the tail. */
-    suspend fun <T> during(block: suspend () -> T): T {
+    /** Stay awake for the whole of [block], then for the tail. [request] marks an agent's request. */
+    suspend fun <T> during(request: Boolean = false, block: suspend () -> T): T {
         working.incrementAndGet()
+        if (request) {
+            requests.incrementAndGet()
+            app?.let { RadioAwake.whileServing(it) }
+        }
         lock?.acquire(10 * 60_000L + TAIL_MS) // a bound, in case something never returns
         try {
             return block()
         } finally {
+            if (request) { servedUntil = SystemClock.elapsedRealtime() + TAIL_MS; requests.decrementAndGet() }
             if (working.decrementAndGet() == 0) { heldUntil = SystemClock.elapsedRealtime() + TAIL_MS; lock?.acquire(TAIL_MS) }
         }
     }

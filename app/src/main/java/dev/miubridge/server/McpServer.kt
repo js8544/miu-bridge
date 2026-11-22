@@ -108,7 +108,7 @@ class McpServer(
     /** One MCP request, from the local HTTP server or from the relay. Checks the bearer token itself. */
     suspend fun handle(method: String, authorization: String?, rawBody: ByteArray): Reply {
         val start = SystemClock.elapsedRealtime()
-        val reply = dev.miubridge.core.Awake.during {
+        val reply = dev.miubridge.core.Awake.during(request = true) {
             if (Sealed.isSealed(rawBody)) sealed(method, rawBody)
             else if (!token.matches(authorization)) Reply(401, json("error" to "unauthorized"))
             else answer(method, rawBody)

@@ -110,6 +110,15 @@ is read from the service with the owner's key, and a thinking effort can be set 
 DeepSeek has been run end to end. The on-phone agent also has `bash`: Android's sh in the app's own
 sandbox, limited to the workspace directory.
 
+## Power and latency
+
+The CPU is held awake only for the length of a request and a short tail (`core/Awake.kt`); between
+requests the phone sleeps and the relay's keepalive or the next request wakes it. For that same
+stretch the Wi-Fi radio is kept out of power save by one byte a tenth of a second to the Wi-Fi
+gateway (`core/RadioAwake.kt`). An idle radio sleeps after about 200 ms and then takes what arrives
+only at its next wake-up, which puts 50 to 100 ms in front of each request; awake, it costs power,
+so it lasts only while an agent is at work and not on mobile data.
+
 ## The background display
 
 It is the same on every phone: 1080 x 2400 at 420 dpi, upright, whatever the device's own screen is
