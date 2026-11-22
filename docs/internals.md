@@ -87,9 +87,10 @@ keyPassword=...
 The relay (`relay/`, a Cloudflare Worker with its devices in D1) is what agents on other networks go
 through. Turning on remote access needs no account: the phone registers itself under a hash of the id
 Android gives this app on that phone, and keeps a WebSocket to the relay. Registering again on the same
-phone keeps the same address and the month's count. There are two hosted relays, the Cloudflare one and
-one in Hong Kong (`relay/selfhost`), because carriers in mainland China take Cloudflare traffic to Europe or
-the United States. The first time remote access is turned on the phone times a round trip to each and stays
+phone keeps the same address and the month's count. The hosted relay at `phone.jinshang.ai` is the self-hosted one (`relay/selfhost`) on a server in
+Hong Kong, because carriers in mainland China take Cloudflare traffic to Europe or the United States;
+`hk.jinshang.ai` is the same server. The Cloudflare relay stays deployed at another hostname with `MOVED`
+set: it holds no phones and keeps the usage reports the Hong Kong relay passes on. The first time remote access is turned on the phone times a round trip to each and stays
 with the quicker (`Account.nearest`); it is not moved afterwards, since its address would change under its
 agents. An address the owner enters under More → Relay server comes first; `relayUrl` in
 `gradle.properties` (comma-separated, the fallback first) changes the built-in ones. See [relay/README.md](../relay/README.md) to run one.

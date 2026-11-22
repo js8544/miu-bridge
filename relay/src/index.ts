@@ -46,6 +46,8 @@ export interface Env {
   DB: D1Database;
   REGISTER_LIMIT: RateLimit;
   TRACE_LIMIT: RateLimit;
+  /** Set when this relay's phones have been handed to another relay: it lets go of them and takes none. */
+  MOVED?: string;
 }
 
 const HOSTED_ORIGIN = "https://phone.jinshang.ai";
@@ -218,6 +220,8 @@ function traceEvent(v: unknown) {
 
 async function device(request: Request, env: Env, id: string, kind: "connect" | "mcp" | "usage"): Promise<Response> {
   const phone = env.PHONE.get(env.PHONE.idFromName(id));
+  // Not 403 or 404: the app takes those to mean the phone was removed, and stops trying.
+  if (env.MOVED && kind === "connect") return json(503, { error: "this relay has handed its phones to another", code: "moved" });
   if (kind !== "mcp") {
     const row = await env.DB.prepare("SELECT key_hash FROM devices WHERE id = ?").bind(id).first<{ key_hash: string }>();
     if (!row) return json(404, { error: "unknown device" });
@@ -348,6 +352,8 @@ export class Phone implements DurableObject {
   async alarm(): Promise<void> {
     const sockets = this.state.getWebSockets();
     if (sockets.length === 0) return;
+    // Handed over: the phone is let go, and finds the other relay when it connects again.
+    if (this.env.MOVED) { for (const ws of sockets) { try { ws.close(1012, "moved"); } catch { /* closing */ } } return; }
     for (const ws of sockets) { try { ws.send("k"); } catch { /* closing */ } }
     await this.state.storage.setAlarm(Date.now() + ((await this.state.storage.get<number>("keepalive_ms")) ?? KEEPALIVE_MS));
   }

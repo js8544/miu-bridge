@@ -40,4 +40,8 @@ Put Caddy in front for the certificate (`selfhost/Caddyfile`) and run it as a se
 usage reports are passed on to `UPSTREAM` (the hosted relay unless you set another, or `""` to
 drop them).
 
+To hand a Cloudflare relay's phones to another relay that has their device rows, point the hostname at
+the other relay and set the variable `MOVED` on this one: it lets go of the phones still connected, which
+then connect again to wherever the hostname now leads, and takes no new ones.
+
 In the app: More → Relay server → enter your relay's address, then turn on remote access.
