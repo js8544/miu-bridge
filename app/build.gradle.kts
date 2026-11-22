@@ -34,7 +34,10 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Unused code and resources are left out: the crypto and UI libraries are used only in part.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName(if (keystore != null) "release" else "debug")
         }
     }
