@@ -12,7 +12,8 @@ owner to finish.
   display, launches apps on it and injects input. `ScreenReaderService` (accessibility, enabled by the
   helper) reads only that display.
 - `server/`: MCP over Streamable HTTP (`POST /mcp`, JSON responses), port 8765, bearer token. One tool
-  call at a time.
+  call at a time. A request may instead come sealed (`server/E2e.kt`): end-to-end encrypted with keys
+  made from the token, which is then not sent. The SDKs do this always, on the Wi-Fi and through the relay.
 - `BridgeService`: foreground service with a stop button; restarts after reboot if it was on.
 
 ## Set up a phone (no computer, Android 11+)
@@ -41,7 +42,10 @@ the address, the token and both ways to use them. The agent decides which.
 
 Agents that write scripts in their own sandbox do not need MCP: `sdk/miu_bridge.py` and
 `sdk/miu-bridge.mjs` (no dependencies) turn `phone.tap("text=Send")` into a request to the phone.
-The relay serves them and their guide at `/sdk/`.
+The relay serves them and their guide at `/sdk/`. Run with the argument `mcp`, either file is a local
+stdio MCP server that carries a client's requests to the phone end-to-end encrypted. An MCP client
+that posts to the address itself is not encrypted that way; More → "Encrypted remote access only"
+refuses such requests when they come through the relay.
 
 `phone_script` is code mode: one call runs a JavaScript script on the phone that calls the other phone
 tools (`call(name, args)`, `print`, `sleep`), so many steps take one round trip and only the printed

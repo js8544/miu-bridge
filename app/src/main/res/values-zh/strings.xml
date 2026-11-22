@@ -133,7 +133,7 @@
     <string name="connect_copy_guide">复制完整说明</string>
     <string name="copied_token">令牌已复制</string>
     <string name="cd_copy_item">复制%1$s</string>
-    <string name="connect_explain">先把完整说明发给 agent：里面有地址、令牌和两种用法（当 MCP 服务器接入，或在 agent 自己的沙箱里写脚本，由它自己决定）。如果它让你把令牌填到它的密钥管理里，再回来单独复制令牌。</string>
+    <string name="connect_explain">先把完整说明发给 agent：里面有地址、令牌和几种用法（在 agent 自己的沙箱里写脚本，或当 MCP 服务器接入，由它自己决定；前两种是端到端加密的）。如果它让你把令牌填到它的密钥管理里，再回来单独复制令牌。</string>
     <string name="copied_guide">已复制，发给你的 agent 即可</string>
     <string name="connect_warning">令牌相当于这台手机的钥匙，只给你信任的 agent。</string>
     <string name="cd_copy">复制</string>
@@ -190,6 +190,8 @@
     <string name="pace_body">在有账号的 App 里放慢节奏，降低被风控的风险</string>
     <string name="onphone_title">手机上的 Agent</string>
     <string name="onphone_body">不用别的设备，直接在这里给它派任务</string>
+    <string name="sealed_title">远程只接受加密连接</string>
+    <string name="sealed_body">拒绝经中转过来、没有端到端加密的请求。agent 要用 SDK 或它自带的本地 MCP 服务器来连；直接填 MCP 地址的方式只在同一 Wi-Fi 下可用。</string>
     <string name="rotate_title">更换令牌</string>
     <string name="rotate_body">怀疑令牌泄露时用；旧令牌立即失效</string>
     <string name="rotate_confirm_title">更换令牌？</string>

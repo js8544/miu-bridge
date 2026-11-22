@@ -11,7 +11,11 @@ issue for a vulnerability. You will get an answer within a few days.
 ## What the design promises
 
 - Agents act only on a background display. The owner's main screen is never read or touched.
-- Every request needs the phone's token, and the phone checks it. The relay cannot act on a phone by itself.
+- Every request needs the phone's token, and the phone checks it.
+- Requests from the SDK and from its local MCP server are end-to-end encrypted between the agent and
+  the phone (see below). The relay, and the Wi-Fi on a direct connection, see neither the token nor
+  what is asked and answered, and cannot change a request, repeat one or put an answer of their own
+  in its place. For these requests the relay cannot act on a phone by itself.
 - The relay forwards requests and answers. It does not store or log their content: no screen text,
   no screenshots, no tool arguments. It stores account email, device name, hashed keys,
   last-seen time and a count of remote tool calls per account per month (`relay/migrations`).
@@ -32,9 +36,31 @@ issue for a vulnerability. You will get an answer within a few days.
 
 A report that breaks one of these is exactly what we want to hear.
 
+## End-to-end encryption
+
+The token is the shared secret between the owner's agent and the phone, and an encrypted request
+never sends it. The agent opens a session by sending a fresh P-256 key with an HMAC-SHA256 over it
+keyed by the token; the phone answers with a fresh key of its own. Both derive, with HKDF-SHA256
+over the ECDH result, salted by the token and bound to both keys and the session id, one AES-256-GCM
+key for each direction. Every request carries a counter that is its nonce and is accepted once; the
+answer is sealed under the same counter, which ties it to its request. Because both keys are fresh
+for each session and kept only in memory, traffic recorded today stays closed to someone who learns
+the token later. `app/src/main/java/dev/miubridge/server/E2e.kt` holds the exact format; the SDKs
+(`sdk/`) are the other side.
+
+What stays visible to the relay: the phone's address, when requests happen, how large they and
+their answers are, and whether an encrypted request was a tool call (the phone says so, for the
+monthly count).
+
 ## Known limits
 
-- Traffic through the relay is TLS to the relay and TLS from it, not end-to-end encrypted: whoever
-  runs the relay could read it in transit. Run your own relay (`relay/`) if that matters to you.
+- An MCP client that is given the relay address and the token as a header (Streamable HTTP) is not
+  end-to-end encrypted: its traffic is TLS to the relay and TLS from it, and whoever runs the relay
+  could read it, the token included, in transit. Use the SDK or its local MCP server
+  (`node miu-bridge.mjs mcp`) instead, and turn on "Encrypted remote access only" in the app to
+  refuse anything else through the relay; or run your own relay (`relay/`).
+- On the same Wi-Fi the phone listens on plain HTTP. Requests from the SDK are encrypted there too;
+  a plain MCP client's are not, so use one only on a Wi-Fi you trust.
+- The relay can still refuse or delay requests, and an answer it makes up fails to open on the agent's side.
 - Anyone holding the address and token controls the background display. Replace the token in the
   app if it leaks.

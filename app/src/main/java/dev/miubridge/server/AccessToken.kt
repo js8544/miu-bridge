@@ -25,7 +25,16 @@ class AccessToken(context: Context) {
         return MessageDigest.isEqual(given.toByteArray(), value.toByteArray())
     }
 
+    /**
+     * The owner's choice to refuse requests through the relay unless they are end-to-end encrypted
+     * with keys made from the token, so that the token itself never passes through the relay.
+     */
+    var sealedOnly: Boolean
+        get() = prefs.getBoolean(SEALED_ONLY, false)
+        set(value) = prefs.edit().putBoolean(SEALED_ONLY, value).apply()
+
     private companion object {
+        const val SEALED_ONLY = "sealed_only"
         const val KEY = "token"
     }
 }

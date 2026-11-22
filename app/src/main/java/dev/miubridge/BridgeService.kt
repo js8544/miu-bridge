@@ -58,7 +58,7 @@ class BridgeService : Service() {
             Awake.init(this)
             Awake.touch(60_000)
             scheduleTick()
-            server = McpServer(app.tools, app.token).also {
+            server = McpServer(app.tools, app.token, sealedOnly = { app.token.sealedOnly }).also {
                 it.start()
                 _running.value = true
                 relay = RelayClient(this, it).apply { start() }

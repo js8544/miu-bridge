@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Keeps an outbound WebSocket to the relay so agents in the cloud can reach this phone without a
  * computer or an open port. Each relay message is one MCP request; the answer goes back on the
- * same socket. Reconnects with backoff until stopped.
+ * same socket. A sealed request ([E2e]) passes through here unopened. Reconnects with backoff until stopped.
  */
 class RelayClient(private val context: Context, private val server: McpServer?) {
     data class State(val connected: Boolean = false, val message: String = "")
@@ -117,9 +117,10 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
             if (text == "pong") return
             scope.launch {
                 val req = runCatching { JSONObject(text) }.getOrNull() ?: return@launch
-                val reply = (server ?: return@launch).handle(req.optString("method"), req.optString("authorization"), req.optString("body").toByteArray())
+                val reply = (server ?: return@launch).handle(req.optString("method"), req.optString("authorization"), req.optString("body").toByteArray(), remote = true)
                 val out = JSONObject().put("id", req.optString("id")).put("status", reply.status).put("ms", reply.ms)
                 reply.body?.let { out.put("body", it.toString()) }
+                if (reply.metered) out.put("metered", true)
                 webSocket.send(out.toString())
             }
         }

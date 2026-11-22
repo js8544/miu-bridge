@@ -9,11 +9,17 @@
  * The relay is a pipe for MCP traffic: it keeps no history and does not check the MCP bearer token —
  * the phone does. It checks that the socket for a device id is opened with that device's key.
  *
+ * A request may come sealed: a JSON body with "miu_e2e": 1, encrypted between the agent and the phone
+ * with keys made from the token (the app's server/E2e.kt describes it). The relay passes it on as it
+ * is and can read neither it nor the answer. It carries no Authorization header: the token never
+ * comes here.
+ *
  * Remote use is metered: each tools/call the phone answers counts once against the phone's monthly
  * allowance (the account's, for a phone that has one; PLAN_LIMITS), whatever the call does on the phone; a phone_script with many steps is one
  * call. Agents on the phone's own network talk to it directly and are not metered. A call that the
  * phone rejects (a wrong token) does not count, so knowing a device id is not enough to use up an
- * account's allowance.
+ * account's allowance. The relay cannot tell what a sealed request is, so the phone says in its
+ * answer whether it was a tool call it answered.
  *
  *   POST   /api/auth/send         {email}                      emails a 6-digit code
  *   POST   /api/auth/verify       {email, code}                -> {token, email} (creates the account on first sign-in)
@@ -391,6 +397,25 @@ async function device(request: Request, env: Env, id: string, kind: "connect" | 
   return traced;
 }
 
+/** Whether a body is a sealed request (not the hello that opens a session, which is never counted). */
+function sealedRequest(body: string): boolean {
+  if (!body.includes('"miu_e2e"')) return false;
+  try {
+    const v = JSON.parse(body);
+    return Boolean(v) && typeof v === "object" && v.miu_e2e === 1 && !v.hello;
+  } catch {
+    return false;
+  }
+}
+
+/** Over the allowance, for a sealed request: the relay cannot write the answer the agent expects, so it says so beside it. */
+function quotaExceededSealed(usage: Usage): Response {
+  return json(429, {
+    error: `This phone has used its ${usage.limit} remote tool calls for ${usage.month}. Agents on the phone's own Wi-Fi are not limited.`,
+    code: "quota_exceeded", used: usage.used, limit: usage.limit, month: usage.month,
+  });
+}
+
 /** The JSON-RPC id of a tools/call request, or null for anything else. */
 function toolCall(body: string): { id: unknown } | null {
   if (!body.includes("tools/call")) return null;
@@ -527,17 +552,22 @@ export class Phone implements DurableObject {
     const body = request.method === "POST" ? await request.text() : "";
     if (body.length > MAX_BODY) return json(413, { error: "request too large" });
     // Only tool calls are metered; the handshake, tools/list and pings are free.
-    const rpc = toolCall(body);
-    const owner = rpc ? await this.state.storage.get<string>("owner") : undefined;
-    if (rpc && owner) {
+    // A sealed request may be one: it is held back when the allowance is used up, and counted if the
+    // phone says it was.
+    const sealed = sealedRequest(body);
+    const rpc = sealed ? null : toolCall(body);
+    const owner = rpc || sealed ? await this.state.storage.get<string>("owner") : undefined;
+    if ((rpc || sealed) && owner) {
       const usage = await this.usage(owner);
-      if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(rpc.id, usage);
+      if (usage.limit !== null && usage.used >= usage.limit) return rpc ? quotaExceeded(rpc.id, usage) : quotaExceededSealed(usage);
     }
     const ready = Date.now();
     const sent = await this.send(socket, request, body);
     const phoneMs = Number(sent.headers.get("X-Phone-Ms") ?? 0);
+    const metered = sent.headers.get("X-Phone-Metered") === "1";
     const answer = new Response(sent.body, sent);
     answer.headers.delete("X-Phone-Ms");
+    answer.headers.delete("X-Phone-Metered");
     const done = Date.now();
     answer.headers.set("X-Relay-Ms", String(done - received));
     answer.headers.set("Server-Timing", [
@@ -546,7 +576,7 @@ export class Phone implements DurableObject {
       `phone;dur=${phoneMs}`,
     ].join(", "));
     // Count what the phone accepted and answered; a rejected token (401) or a relay failure does not count.
-    if (rpc && owner && answer.status === 200) {
+    if ((rpc || (sealed && metered)) && owner && answer.status === 200) {
       this.state.waitUntil((async () => {
         const usage = await this.state.storage.get<CachedUsage>("usage");
         if (usage) await this.state.storage.put("usage", { ...usage, used: usage.used + 1 });
@@ -587,10 +617,10 @@ export class Phone implements DurableObject {
     return answer;
   }
 
-  /** A reply from the phone: `{id, status, body}`. */
+  /** A reply from the phone: `{id, status, body, ms, metered}`. */
   async webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== "string") return;
-    let reply: { id?: string; status?: number; body?: string; ms?: number };
+    let reply: { id?: string; status?: number; body?: string; ms?: number; metered?: boolean };
     try { reply = JSON.parse(message); } catch { return; }
     const p = reply.id ? this.pending.get(reply.id) : undefined;
     if (!p) return;
@@ -599,7 +629,7 @@ export class Phone implements DurableObject {
     const status = reply.status ?? 502;
     p.resolve(new Response(status === 202 || status === 204 || !reply.body ? null : reply.body, {
       status,
-      headers: { ...(reply.body ? { "Content-Type": "application/json" } : {}), "X-Phone-Ms": String(Number(reply.ms) || 0) },
+      headers: { ...(reply.body ? { "Content-Type": "application/json" } : {}), "X-Phone-Ms": String(Number(reply.ms) || 0), "X-Phone-Metered": reply.metered === true ? "1" : "0" },
     }));
   }
 

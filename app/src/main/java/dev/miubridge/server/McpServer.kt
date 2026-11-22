@@ -29,14 +29,18 @@ import java.net.SocketTimeoutException
 /**
  * A minimal MCP server over Streamable HTTP (JSON responses, no SSE): `POST /mcp` with JSON-RPC, served on the
  * local network and, through [RelayClient], from the public relay.
- * Every request needs `Authorization: Bearer <token>`. Tool calls run one at a time, because the
+ * Every request needs `Authorization: Bearer <token>`, or comes sealed with keys made from the token
+ * ([E2e]), which keeps it closed to whatever carries it. Tool calls run one at a time, because the
  * phone has one background screen.
  */
 class McpServer(
     private val handler: CommandHandler,
     private val token: AccessToken,
     private val port: Int = DEFAULT_PORT,
+    /** The owner's choice to refuse requests through the relay that are not sealed. */
+    private val sealedOnly: () -> Boolean = { false },
 ) {
+    private val e2e = E2e { token.value }
     private val scope = CoroutineScope(Dispatchers.IO)
     private val callLock = Mutex()
 
@@ -97,26 +101,46 @@ class McpServer(
         write(out, reply.status, reply.body, reply.ms)
     }
 
-    /** [ms] is how long this phone took over the request, for whoever is tracing where the time goes. */
-    class Reply(val status: Int, val body: JSONObject?, val ms: Long = 0)
+    /**
+     * [ms] is how long this phone took over the request, for whoever is tracing where the time goes.
+     * [metered] is set on a sealed request that was an answered tool call: the relay cannot see that itself.
+     */
+    class Reply(val status: Int, val body: JSONObject?, val ms: Long = 0, val metered: Boolean = false)
 
-    /** One MCP request, from the local HTTP server or from the relay. Checks the bearer token itself. */
-    suspend fun handle(method: String, authorization: String?, rawBody: ByteArray): Reply {
+    /**
+     * One MCP request, from the local HTTP server or ([remote]) from the relay. Checks the bearer
+     * token itself, or opens the envelope of a sealed request.
+     */
+    suspend fun handle(method: String, authorization: String?, rawBody: ByteArray, remote: Boolean = false): Reply {
         val start = SystemClock.elapsedRealtime()
-        val reply = dev.miubridge.core.Awake.during { answer(method, authorization, rawBody) }
-        return Reply(reply.status, reply.body, SystemClock.elapsedRealtime() - start)
+        val reply = dev.miubridge.core.Awake.during { answer(method, authorization, rawBody, remote) }
+        return Reply(reply.status, reply.body, SystemClock.elapsedRealtime() - start, reply.metered)
     }
 
-    private suspend fun answer(method: String, authorization: String?, rawBody: ByteArray): Reply {
+    private suspend fun answer(method: String, authorization: String?, rawBody: ByteArray, remote: Boolean): Reply {
+        val text = String(rawBody, Charsets.UTF_8)
+        val envelope = if (method == "POST" && text.contains("\"miu_e2e\"")) runCatching { JSONObject(text) }.getOrNull()?.takeIf { E2e.isEnvelope(it) } else null
+        if (envelope != null) {
+            val sealed = e2e.handle(envelope) { rpc(String(it, Charsets.UTF_8)) }
+            return Reply(sealed.status, sealed.body, metered = sealed.metered)
+        }
+        if (remote && sealedOnly()) {
+            return Reply(403, json("error" to "this phone only accepts end-to-end encrypted requests through the relay: use the SDK, or its local MCP server", "code" to "e2e_required"))
+        }
         if (!token.matches(authorization)) return Reply(401, json("error" to "unauthorized"))
         when (method) {
             "POST" -> {}
             "DELETE" -> return Reply(200, null)
             else -> return Reply(405, null) // no server-initiated stream
         }
-        val body = runCatching { JSONObject(String(rawBody, Charsets.UTF_8)) }.getOrNull()
-            ?: return Reply(400, rpcError(null, -32700, "parse error"))
-        if (!body.has("id")) return Reply(202, null) // a notification
+        return rpc(text).let { Reply(it.status, it.body) }
+    }
+
+    /** One JSON-RPC message from a caller already known to hold the token. */
+    private suspend fun rpc(text: String): E2e.Inner {
+        val body = runCatching { JSONObject(text) }.getOrNull()
+            ?: return E2e.Inner(400, rpcError(null, -32700, "parse error"))
+        if (!body.has("id")) return E2e.Inner(202, null) // a notification
         val id = body.get("id")
         val params = body.optJSONObject("params") ?: JSONObject()
         val reply = when (body.optString("method")) {
@@ -132,7 +156,7 @@ class McpServer(
             "tools/call" -> rpcResult(id, callTool(params))
             else -> rpcError(id, -32601, "method not found")
         }
-        return Reply(200, reply)
+        return E2e.Inner(200, reply, toolCall = body.optString("method") == "tools/call")
     }
 
     private suspend fun callTool(params: JSONObject): JSONObject {
@@ -252,6 +276,6 @@ class McpServer(
         private const val REMEMBERED = 64
         private const val REMEMBER_MS = 10 * 60_000L
         private const val TAG = "McpServer"
-        private val REASONS = mapOf(200 to "OK", 202 to "Accepted", 400 to "Bad Request", 401 to "Unauthorized", 404 to "Not Found", 405 to "Method Not Allowed")
+        private val REASONS = mapOf(200 to "OK", 202 to "Accepted", 400 to "Bad Request", 401 to "Unauthorized", 403 to "Forbidden", 404 to "Not Found", 405 to "Method Not Allowed", 409 to "Conflict")
     }
 }

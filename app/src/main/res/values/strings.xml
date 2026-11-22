@@ -133,7 +133,7 @@
     <string name="connect_copy_guide">Copy full instructions</string>
     <string name="copied_token">Token copied</string>
     <string name="cd_copy_item">Copy %1$s</string>
-    <string name="connect_explain">Send the full text to any agent: it holds the address, the token and both ways to use the phone (as an MCP server, or from scripts in the agent\'s own sandbox; the agent decides). If the agent then asks you to put the token in its credential store, come back and copy just the token.</string>
+    <string name="connect_explain">Send the full text to any agent: it holds the address, the token and the ways to use the phone (from scripts in the agent\'s own sandbox or as an MCP server; the agent decides, and the first two are end-to-end encrypted). If the agent then asks you to put the token in its credential store, come back and copy just the token.</string>
     <string name="copied_guide">Copied. Send it to your agent.</string>
     <string name="connect_warning">The token is the key to this phone. Give it only to agents you trust.</string>
     <string name="cd_copy">Copy</string>
@@ -190,6 +190,8 @@
     <string name="pace_body">Slower in apps with accounts, to avoid being flagged</string>
     <string name="onphone_title">Agent on this phone</string>
     <string name="onphone_body">Give it tasks right here, no other device needed</string>
+    <string name="sealed_title">Encrypted remote access only</string>
+    <string name="sealed_body">Refuse requests through the relay that are not end-to-end encrypted. Agents then connect with the SDK or its local MCP server; the plain MCP address only works on this Wi-Fi.</string>
     <string name="rotate_title">Replace token</string>
     <string name="rotate_body">The old token stops working at once</string>
     <string name="rotate_confirm_title">Replace the token?</string>

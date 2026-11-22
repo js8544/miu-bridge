@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
@@ -1003,6 +1004,14 @@ class MainActivity : ComponentActivity() {
      * ([lan], null without Wi-Fi) and the one through the relay ([remote], null when remote access is off).
      */
     private fun connectionDetails(lan: String?, remote: String?, token: String, relay: String): String {
+        // Unsealed requests through the relay are refused when the owner said so; on the Wi-Fi they still work.
+        val sealedOnly = (application as App).token.sealedOnly
+        val plain = when {
+            sealedOnly && lan == null -> null
+            sealedOnly && remote != null -> "Only at the Wi-Fi address: the owner has turned this off through the relay."
+            remote != null -> "Not end-to-end encrypted: through the relay, whoever runs it could read the traffic and the token. Use it only if you cannot run a local process."
+            else -> "Not encrypted: only for a Wi-Fi you trust."
+        }
         val both = lan != null && remote != null
         val where = when {
             both -> """
@@ -1016,22 +1025,29 @@ class MainActivity : ComponentActivity() {
             else -> "URL: ${lan ?: "http://<phone-ip>:${McpServer.DEFAULT_PORT}/mcp"}\nIt works while you are on the same Wi-Fi as the phone."
         }
         val url = if (both) "<URL>" else remote ?: lan ?: "<URL>"
+        val direct = if (plain == null) "" else listOf(
+            "3. As an MCP server (Streamable HTTP) at the URL itself, with the header \"Authorization: Bearer <token>\".",
+            "   $plain",
+            "   Claude Code: claude mcp add --transport http phone \"$url\" --header \"Authorization: Bearer $token\"",
+        ).joinToString("\n", postfix = "\n")
         return """
 Miu Bridge: operate apps on my Android phone, on a background display.
 
 $where
 Token: $token
-Send the token as the header "Authorization: Bearer <token>". Keep it secret.
+The token is the key to the phone. Keep it secret.
 
-Use it whichever way suits you; both reach the same phone and the same tools${if (both) " (<URL> is the address you chose)" else ""}:
-1. As an MCP server (Streamable HTTP) at the URL, with that header.
-   Claude Code: claude mcp add --transport http phone "$url" --header "Authorization: Bearer $token"
-2. From scripts in your own sandbox, with the SDK (JavaScript or Python, no dependencies):
+Use it whichever way suits you; all reach the same phone and the same tools${if (both) " (<URL> is the address you chose)" else ""}:
+1. From scripts in your own sandbox, with the SDK (JavaScript or Python, no dependencies). End-to-end
+   encrypted: the token is never sent, and nothing between you and the phone can read what passes.
    curl -fsSO $relay/sdk/miu-bridge.mjs   # or miu_bridge.py
    export MIU_BRIDGE_URL="$url"
    export MIU_BRIDGE_TOKEN="$token"
    Guide: $relay/sdk/
-If you call the URL without the SDK, send a User-Agent header that names your client.
+2. As an MCP server, end-to-end encrypted the same way: run the SDK file as a local (stdio) MCP server.
+   Claude Code: claude mcp add --env MIU_BRIDGE_URL="$url" --env MIU_BRIDGE_TOKEN="$token" phone -- node /path/to/miu-bridge.mjs mcp
+   Without Node: python3 /path/to/miu_bridge.py mcp
+${direct}If you call the URL without the SDK, send a User-Agent header that names your client.
         """.trim()
     }
 
@@ -1228,6 +1244,11 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
         var confirmRotate by remember { mutableStateOf(false) }
         val replaced = stringResource(R.string.token_replaced)
         var humanPace by remember { mutableStateOf(app.phone.pace != "fast") }
+        var sealedOnly by remember { mutableStateOf(app.token.sealedOnly) }
+        fun setSealedOnly(on: Boolean) {
+            sealedOnly = on
+            app.token.sealedOnly = on
+        }
         var tracing by remember { mutableStateOf(app.traces.enabled) }
         var feedbackDialog by remember { mutableStateOf(false) }
         var policyMode by remember { mutableStateOf(app.phone.appPolicy.mode) }
@@ -1308,6 +1329,14 @@ If you call the URL without the SDK, send a User-Agent header that names your cl
                 )
             }
             if (feedbackDialog) FeedbackDialog(app.traces.notes()) { feedbackDialog = false }
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.sealed_title)) },
+                supportingContent = { Text(stringResource(R.string.sealed_body)) },
+                leadingContent = { Icon(Icons.Filled.Lock, null) },
+                trailingContent = { Switch(checked = sealedOnly, onCheckedChange = ::setSealedOnly) },
+                colors = clearItem(),
+                modifier = Modifier.clickable { setSealedOnly(!sealedOnly) },
+            )
             ListItem(
                 headlineContent = { Text(stringResource(R.string.relay_title)) },
                 supportingContent = { Text(if (relayUrl == Account.DEFAULT_RELAY_URL) stringResource(R.string.relay_default) else relayUrl) },

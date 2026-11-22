@@ -4,8 +4,15 @@ Operate apps on the owner's Android phone from a script in your own sandbox. You
 Python or JavaScript; each call is carried out on the phone, on a background display the owner does
 not see, and returns what the screen shows afterwards.
 
-The same address and token also work as an MCP server (Streamable HTTP, header `Authorization: Bearer <token>`)
-with the same tools. Use whichever suits you: MCP tool calls, scripts in your sandbox with this SDK, or both.
+Everything the SDK sends is end-to-end encrypted between your sandbox and the phone with keys made
+from the token; the token itself is never sent. A relay or network in between cannot read, change or
+repeat a request.
+
+The same tools are also there as an MCP server. Encrypted the same way, run the SDK file as a local
+(stdio) MCP server with `MIU_BRIDGE_URL` and `MIU_BRIDGE_TOKEN` in its environment:
+`node miu-bridge.mjs mcp` or `python3 miu_bridge.py mcp`. The address also answers MCP directly
+(Streamable HTTP, header `Authorization: Bearer <token>`), but that way the relay sees the token and
+the traffic, and the owner may have turned it off. Use whichever suits you: scripts, MCP tool calls, or both.
 
 ## Set up
 
@@ -77,6 +84,9 @@ Failures raise `PhoneError`: the message says what to do, and `.code` is stable 
 | `quota_exceeded` | The phone's monthly allowance of remote calls is used up. Only through the relay; on the phone's own Wi-Fi there is no limit. |
 | `blocked_app`, `not_installed`, `on_main_display` | The app cannot be opened here. |
 | `phone_offline`, `unreachable`, `unauthorized` | The phone is not connected; the network failed; the token is wrong. |
+| `e2e_unsupported` | The phone's app is from before end-to-end encryption. Ask the owner to update it; `encrypt=False` (JavaScript `encrypt: false`, or `MIU_BRIDGE_PLAINTEXT=1`) sends in the clear until then. |
+| `e2e_required` | You sent an unencrypted request through the relay and the owner only accepts encrypted ones: use the SDK or its local MCP server. |
+| `e2e_rejected` | A message did not open with the session's keys: something between you and the phone changed or repeated it. |
 | `bad_request`, `unknown_tool`, `script_error`, `failed` | The call itself was wrong, or anything else. A script stopped by a failed tool call carries that call's code. |
 
 ## How to work
@@ -95,6 +105,8 @@ needs (the facts you were after, or the part of the final screen you will act on
 
 ## Good to know
 
+- Python encrypts with the `cryptography` package when it is installed and with its own slower AES
+  when it is not: about a second more for a screenshot, nothing you would notice for a screen as text.
 - If you call the address yourself instead of through this SDK, send a `User-Agent` header that names
   your client. The relay's CDN answers some default signatures (Python's `Python-urllib`, for one) with
   `403` and `error code: 1010`; that is the CDN, not the phone, and not your token.
