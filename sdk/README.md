@@ -105,8 +105,8 @@ needs (the facts you were after, or the part of the final screen you will act on
 
 ## Good to know
 
-- Python encrypts with the `cryptography` package when it is installed and with its own slower AES
-  when it is not: about a second more for a screenshot, nothing you would notice for a screen as text.
+- Python encrypts with the `cryptography` package when it is installed and with its own AES when it
+  is not: about a tenth of a second for a screenshot, a millisecond for a screen as text.
 - If you call the address yourself instead of through this SDK, send a `User-Agent` header that names
   your client. The relay's CDN answers some default signatures (Python's `Python-urllib`, for one) with
   `403` and `error code: 1010`; that is the CDN, not the phone, and not your token.

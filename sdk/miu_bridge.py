@@ -14,8 +14,8 @@ text=Send, text="Send" (exact), id=send_btn, role=button[name="Send"], optionall
 
 Requests are end-to-end encrypted between here and the phone with keys made from the token, which is
 itself never sent: a relay or network in between can read neither what you ask nor what comes back.
-With the `cryptography` package installed its AES is used; without it a slower one in this file
-(about a second for a screenshot).
+With the `cryptography` package installed its AES is used; without it the one in this file, which
+takes about a tenth of a second for a screenshot and a millisecond for a screen as text.
 
 `python miu_bridge.py mcp` runs this file as a local MCP server (stdio) that carries an MCP client's
 requests to the phone the same way, for clients that would otherwise send them to the URL in the clear.
@@ -158,32 +158,46 @@ def _hkdf(salt, ikm, info, length=64):
     return out[:length]
 
 
-class _Aes:
-    """AES-256 encryption of single blocks, for GCM. Tables are built on first use."""
+def _sbox(u, ones):
+    """The AES S-box on eight integers holding one bit of every byte each (most significant first), as the circuit
+    of Boyar and Peralta: 113 operations however many bytes there are. `ones` has a 1 for every byte."""
+    u0, u1, u2, u3, u4, u5, u6, u7 = u
+    t1 = u0 ^ u3; t2 = u0 ^ u5; t3 = u0 ^ u6; t4 = u3 ^ u5; t5 = u4 ^ u6; t6 = t1 ^ t5; t7 = u1 ^ u2
+    t8 = u7 ^ t6; t9 = u7 ^ t7; t10 = t6 ^ t7; t11 = u1 ^ u5; t12 = u2 ^ u5; t13 = t3 ^ t4; t14 = t6 ^ t11
+    t15 = t5 ^ t11; t16 = t5 ^ t12; t17 = t9 ^ t16; t18 = u3 ^ u7; t19 = t7 ^ t18; t20 = t1 ^ t19; t21 = u6 ^ u7
+    t22 = t7 ^ t21; t23 = t2 ^ t22; t24 = t2 ^ t10; t25 = t20 ^ t17; t26 = t3 ^ t16; t27 = t1 ^ t12
+    m1 = t13 & t6; m2 = t23 & t8; m3 = t14 ^ m1; m4 = t19 & u7; m5 = m4 ^ m1; m6 = t3 & t16; m7 = t22 & t9
+    m8 = t26 ^ m6; m9 = t20 & t17; m10 = m9 ^ m6; m11 = t1 & t15; m12 = t4 & t27; m13 = m12 ^ m11; m14 = t2 & t10
+    m15 = m14 ^ m11; m16 = m3 ^ m2; m17 = m5 ^ t24; m18 = m8 ^ m7; m19 = m10 ^ m15; m20 = m16 ^ m13; m21 = m17 ^ m15
+    m22 = m18 ^ m13; m23 = m19 ^ t25; m24 = m22 ^ m23; m25 = m22 & m20; m26 = m21 ^ m25; m27 = m20 ^ m21
+    m28 = m23 ^ m25; m29 = m28 & m27; m30 = m26 & m24; m31 = m20 & m23; m32 = m27 & m31; m33 = m27 ^ m25
+    m34 = m21 & m22; m35 = m24 & m34; m36 = m24 ^ m25; m37 = m21 ^ m29; m38 = m32 ^ m33; m39 = m23 ^ m30
+    m40 = m35 ^ m36; m41 = m38 ^ m40; m42 = m37 ^ m39; m43 = m37 ^ m38; m44 = m39 ^ m40; m45 = m42 ^ m41
+    m46 = m44 & t6; m47 = m40 & t8; m48 = m39 & u7; m49 = m43 & t16; m50 = m38 & t9; m51 = m37 & t17
+    m52 = m42 & t15; m53 = m45 & t27; m54 = m41 & t10; m55 = m44 & t13; m56 = m40 & t23; m57 = m39 & t19
+    m58 = m43 & t3; m59 = m38 & t22; m60 = m37 & t20; m61 = m42 & t1; m62 = m45 & t4; m63 = m41 & t2
+    l0 = m61 ^ m62; l1 = m50 ^ m56; l2 = m46 ^ m48; l3 = m47 ^ m55; l4 = m54 ^ m58; l5 = m49 ^ m61; l6 = m62 ^ l5
+    l7 = m46 ^ l3; l8 = m51 ^ m59; l9 = m52 ^ m53; l10 = m53 ^ l4; l11 = m60 ^ l2; l12 = m48 ^ m51; l13 = m50 ^ l0
+    l14 = m52 ^ m61; l15 = m55 ^ l1; l16 = m56 ^ l0; l17 = m57 ^ l1; l18 = m58 ^ l8; l19 = m63 ^ l4; l20 = l0 ^ l1
+    l21 = l1 ^ l7; l22 = l3 ^ l12; l23 = l18 ^ l2; l24 = l15 ^ l9; l25 = l6 ^ l10; l26 = l7 ^ l9; l27 = l8 ^ l10
+    l28 = l11 ^ l14; l29 = l11 ^ l17
+    return (l6 ^ l24, l16 ^ l26 ^ ones, l19 ^ l28 ^ ones, l6 ^ l21, l20 ^ l22, l25 ^ l29, l13 ^ l27 ^ ones, l6 ^ l23 ^ ones)
 
-    _tables = None
+
+class _Aes:
+    """AES-256 encryption of many blocks at once. Python has no fast way to do one block, but it is fast on very
+    long integers, so the blocks are turned on their side: eight integers, each holding one bit of every byte, and
+    each step of the cipher becomes a few operations on those whatever the number of blocks. In such an integer a
+    block is 16 bits, its first byte the highest; byte 4c+r is row r of column c."""
+
+    _table = None
 
     def __init__(self, key):
-        if _Aes._tables is None:
-            sbox, p, q = [0x63] * 256, 1, 1
-            while True:  # walk the multiplicative group: p goes up by 3, q is its inverse
-                p = (p ^ (p << 1) ^ (0x1B if p & 0x80 else 0)) & 0xFF
-                q ^= q << 1
-                q ^= q << 2
-                q ^= q << 4
-                q &= 0xFF
-                if q & 0x80:
-                    q ^= 0x09
-                x = q ^ (q << 1 | q >> 7) ^ (q << 2 | q >> 6) ^ (q << 3 | q >> 5) ^ (q << 4 | q >> 4)
-                sbox[p] = (x ^ 0x63) & 0xFF
-                if p == 1:
-                    break
-            double = [(v << 1 ^ (0x1B if v & 0x80 else 0)) & 0xFF for v in sbox]
-            t0 = [d << 24 | v << 16 | v << 8 | (d ^ v) for v, d in zip(sbox, double)]
-            turn = lambda table, by: [(w >> by | w << (32 - by)) & 0xFFFFFFFF for w in table]
-            _Aes._tables = sbox, t0, turn(t0, 8), turn(t0, 16), turn(t0, 24)
-        sbox = _Aes._tables[0]
-        sub = lambda w: sbox[w >> 24] << 24 | sbox[w >> 16 & 255] << 16 | sbox[w >> 8 & 255] << 8 | sbox[w & 255]
+        if _Aes._table is None:  # the S-box as a table, for the key schedule: the circuit run over all 256 bytes
+            out = _sbox([sum((v >> bit & 1) << v for v in range(256)) for bit in range(7, -1, -1)], (1 << 256) - 1)
+            _Aes._table = [sum((out[k] >> v & 1) << (7 - k) for k in range(8)) for v in range(256)]
+        table = _Aes._table
+        sub = lambda w: table[w >> 24] << 24 | table[w >> 16 & 255] << 16 | table[w >> 8 & 255] << 8 | table[w & 255]
         words = [int.from_bytes(key[i:i + 4], "big") for i in range(0, 32, 4)]
         rcon = 1
         for i in range(8, 60):
@@ -194,25 +208,46 @@ class _Aes:
             elif i % 8 == 4:
                 w = sub(w)
             words.append(words[-8] ^ w)
-        self._keys = words
+        # For each round and each bit of a byte, the 16 bits that bit takes across the round key's bytes.
+        self._keys = []
+        for i in range(0, 60, 4):
+            k = b"".join(w.to_bytes(4, "big") for w in words[i:i + 4])
+            self._keys.append([sum((k[p] >> bit & 1) << (15 - p) for p in range(16)) for bit in range(8)])
 
-    def block(self, value):
-        """Encrypts one block given, and returned, as a 128-bit integer."""
-        sbox, t0, t1, t2, t3 = _Aes._tables
-        k = self._keys
-        a, b, c, d = (value >> 96) ^ k[0], (value >> 64 & 0xFFFFFFFF) ^ k[1], (value >> 32 & 0xFFFFFFFF) ^ k[2], (value & 0xFFFFFFFF) ^ k[3]
-        for i in range(4, 56, 4):
-            a, b, c, d = (
-                t0[a >> 24] ^ t1[b >> 16 & 255] ^ t2[c >> 8 & 255] ^ t3[d & 255] ^ k[i],
-                t0[b >> 24] ^ t1[c >> 16 & 255] ^ t2[d >> 8 & 255] ^ t3[a & 255] ^ k[i + 1],
-                t0[c >> 24] ^ t1[d >> 16 & 255] ^ t2[a >> 8 & 255] ^ t3[b & 255] ^ k[i + 2],
-                t0[d >> 24] ^ t1[a >> 16 & 255] ^ t2[b >> 8 & 255] ^ t3[c & 255] ^ k[i + 3],
-            )
-        return (
-            (sbox[a >> 24] << 24 | sbox[b >> 16 & 255] << 16 | sbox[c >> 8 & 255] << 8 | sbox[d & 255]) ^ k[56]) << 96 | (
-            (sbox[b >> 24] << 24 | sbox[c >> 16 & 255] << 16 | sbox[d >> 8 & 255] << 8 | sbox[a & 255]) ^ k[57]) << 64 | (
-            (sbox[c >> 24] << 24 | sbox[d >> 16 & 255] << 16 | sbox[a >> 8 & 255] << 8 | sbox[b & 255]) ^ k[58]) << 32 | (
-            (sbox[d >> 24] << 24 | sbox[a >> 16 & 255] << 16 | sbox[b >> 8 & 255] << 8 | sbox[c & 255]) ^ k[59])
+    def encrypt(self, data):
+        """Encrypts each 16-byte block of `data` on its own."""
+        size, count = len(data), len(data) // 16
+        every = ((1 << 16 * count) - 1) // 0xFFFF  # a 1 at the foot of every block
+        ones = every * 0xFFFF
+        bytewise = int.from_bytes(b"\x01" * size, "big")
+        # On its side: bit by bit, the bytes as text of 0s and 1s, read back as one binary number.
+        x = int.from_bytes(data, "big")
+        s = [int(((x >> bit & bytewise) | bytewise * 0x30).to_bytes(size, "big"), 2) for bit in range(8)]
+        row0, rest, upper, lower = every * 0x8888, every * 0x7777, every * 0x3333, every * 0xCCCC
+        # ShiftRows, row by row: the columns that move left within the block, and those that wrap round.
+        moves = [(every * a, 4 * r, every * b, 16 - 4 * r) for r, a, b in ((1, 0x0444, 0x4000), (2, 0x0022, 0x2200), (3, 0x0001, 0x1110))]
+        for number, key in enumerate(self._keys):
+            if number:
+                s = list(_sbox(s[::-1], ones)[::-1])
+                for bit in range(8):
+                    v = s[bit]
+                    w = v & row0
+                    for stay, left, wrap, right in moves:
+                        w |= (v & stay) << left | (v & wrap) >> right
+                    s[bit] = w
+                if number < 14:  # MixColumns: each byte with the one below it doubled, plus the other three
+                    below = [(v & rest) << 1 | (v & row0) >> 3 for v in s]
+                    t = [v ^ b for v, b in zip(s, below)]
+                    two = [(v & upper) << 2 | (v & lower) >> 2 for v in t]
+                    high = t[7]
+                    double = [high, t[0] ^ high, t[1], t[2] ^ high, t[3] ^ high, t[4], t[5], t[6]]
+                    s = [d ^ b ^ w for d, b, w in zip(double, below, two)]
+            s = [v ^ every * k for v, k in zip(s, key)]
+        # Upright again: each integer written out as 0s and 1s is already one byte for every bit.
+        out = 0
+        for bit in range(8):
+            out |= (int.from_bytes(format(s[bit], "0%db" % size).encode(), "big") & bytewise) << bit
+        return out.to_bytes(size, "big")
 
 
 class _Gcm:
@@ -221,7 +256,7 @@ class _Gcm:
     def __init__(self, key):
         self._aes = _Aes(key)
         # Multiplying by the hash key, a byte at a time: one table of 256 products for each byte of a block.
-        power = self._aes.block(0)
+        power = int.from_bytes(self._aes.encrypt(bytes(16)), "big")
         bits = []
         for _ in range(128):
             bits.append(power)
@@ -234,7 +269,12 @@ class _Gcm:
                 table[value] = table[value ^ low] ^ bits[at + 7 - low.bit_length() + 1]
             self._products.append(table)
 
-    def _tag(self, nonce, aad, ct):
+    def _stream(self, nonce, length):
+        """The mask for the tag, and `length` bytes to add to the text: the cipher run over a counter."""
+        blocks = self._aes.encrypt(b"".join(nonce + i.to_bytes(4, "big") for i in range(1, -(-length // 16) + 2)))
+        return blocks[:16], blocks[16:16 + length]
+
+    def _tag(self, mask, aad, ct):
         products, acc = self._products, 0
         pad = lambda data: data + bytes(-len(data) % 16)
         data = pad(aad) + pad(ct) + (len(aad) * 8).to_bytes(8, "big") + (len(ct) * 8).to_bytes(8, "big")
@@ -244,25 +284,21 @@ class _Gcm:
             for table in products:
                 acc ^= table[block >> 120]
                 block = block << 8 & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
-        return (acc ^ self._aes.block(int.from_bytes(nonce, "big") << 32 | 1)).to_bytes(16, "big")
-
-    def _stream(self, nonce, data):
-        if not data:
-            return b""
-        block, start = self._aes.block, int.from_bytes(nonce, "big") << 32 | 2
-        blocks = -(-len(data) // 16)
-        stream = b"".join(block(start + i).to_bytes(16, "big") for i in range(blocks))
-        return (int.from_bytes(data, "big") ^ int.from_bytes(stream[:len(data)], "big")).to_bytes(len(data), "big")
+        return (acc ^ int.from_bytes(mask, "big")).to_bytes(16, "big")
 
     def encrypt(self, nonce, data, aad):
-        ct = self._stream(nonce, data)
-        return ct + self._tag(nonce, aad, ct)
+        mask, stream = self._stream(nonce, len(data))
+        ct = (int.from_bytes(data, "big") ^ int.from_bytes(stream, "big")).to_bytes(len(data), "big")
+        return ct + self._tag(mask, aad, ct)
 
     def decrypt(self, nonce, data, aad):
-        ct, tag = data[:-16], data[-16:]
-        if len(data) < 16 or not hmac.compare_digest(tag, self._tag(nonce, aad, ct)):
+        if len(data) < 16:
             raise ValueError("not authentic")
-        return self._stream(nonce, ct)
+        ct, tag = data[:-16], data[-16:]
+        mask, stream = self._stream(nonce, len(ct))
+        if not hmac.compare_digest(tag, self._tag(mask, aad, ct)):
+            raise ValueError("not authentic")
+        return (int.from_bytes(ct, "big") ^ int.from_bytes(stream, "big")).to_bytes(len(ct), "big")
 
 
 def _gcm(key):
