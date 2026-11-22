@@ -257,7 +257,8 @@ class PhoneController(private val context: Context) : CommandHandler {
             .put("handed_off", handedOff ?: JSONObject.NULL)
         if (s != null) {
             out.put("display", JSONObject().put("id", s.id).put("width", s.width).put("height", s.height).put("dpi", s.dpi))
-            out.put("package", svc?.topPackage(s.id) ?: JSONObject.NULL)
+            // While the app is out of the foreground the display shows no window; it is still the app that comes back.
+            out.put("package", svc?.topPackage(s.id) ?: lastSnapshot?.packageName?.takeIf { left } ?: JSONObject.NULL)
         } else out.put("message", state.value.message)
         return out
     }
