@@ -225,17 +225,17 @@ async function device(request: Request, env: Env, id: string, kind: "connect" | 
     if (!key || !timingSafeEqual(await sha256(key), row.key_hash)) return json(403, { error: "device key mismatch" });
     if (kind === "usage") return json(200, await usageOf(env, id));
     await env.DB.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?").bind(Date.now(), id).run();
-    // The phone's object remembers which phone it serves, so a tool call never waits on the database.
     const attach = new Request("https://relay/connect", request);
-    attach.headers.set("X-Relay-Device", id);
     attach.headers.set("X-Relay-Keepalive", new URL(request.url).searchParams.get("k") ?? "");
     attach.headers.set("X-Relay-Colo", String((request as { cf?: { colo?: string } }).cf?.colo ?? ""));
     return phone.fetch(attach);
   }
-  // A tool call goes straight to the phone's object: it knows the phone and its allowance from the
-  // phone's own connection. An id that is not a connected phone is simply offline.
+  // A tool call goes straight to the phone's object, which keeps the phone's allowance beside it, so
+  // the call does not wait on the database. An id that is not a connected phone is simply offline.
   const start = Date.now();
-  const answer = await phone.fetch(new Request("https://relay/mcp", { method: request.method, headers: request.headers, body: request.method === "POST" ? await request.text() : undefined }));
+  const forwarded = new Request("https://relay/mcp", { method: request.method, headers: request.headers, body: request.method === "POST" ? await request.text() : undefined });
+  forwarded.headers.set("X-Relay-Device", id);
+  const answer = await phone.fetch(forwarded);
   // Where the time went, for whoever is tracing a slow call: this entry point, the hop to the phone's
   // object, that object's own work, the link to the phone, and the phone. Durations and places only.
   const inside = answer.headers.get("Server-Timing");
@@ -324,10 +324,9 @@ export class Phone implements DurableObject {
     for (const old of this.state.getWebSockets()) old.close(4000, "replaced by a newer connection");
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
-    // Set by the Worker after it checked the device key. A new connection also drops the cached
-    // allowance, so a plan change or another phone's use shows at the latest on the next reconnect.
-    const device = request.headers.get("X-Relay-Device");
-    if (device) this.state.waitUntil(Promise.all([this.state.storage.put("device", device), this.state.storage.delete(["usage", "owner"])]));
+    // A new connection drops the cached allowance, so it is read from the database again.
+    // ("owner" is what earlier versions stored here.)
+    this.state.waitUntil(this.state.storage.delete(["usage", "owner"]));
     // From here on the relay keeps the link open, so the phone can sleep between requests.
     const asked = Number(request.headers.get("X-Relay-Keepalive") || 0);
     const every = asked ? Math.min(Math.max(asked, KEEPALIVE_RANGE_S[0]), KEEPALIVE_RANGE_S[1]) * 1000 : KEEPALIVE_MS;
@@ -376,7 +375,7 @@ export class Phone implements DurableObject {
     if (body.length > MAX_BODY) return json(413, { error: "request too large" });
     // Only tool calls are metered; the handshake, tools/list and pings are free.
     const rpc = toolCall(body);
-    const device = rpc ? await this.state.storage.get<string>("device") : undefined;
+    const device = rpc ? request.headers.get("X-Relay-Device") : null;
     if (rpc && device) {
       const usage = await this.usage(device);
       if (usage.used >= usage.limit) {
