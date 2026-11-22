@@ -1,0 +1,24 @@
+# /etc/systemd/system/miu-relay.service
+[Unit]
+Description=Miu Bridge relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=miu-relay
+WorkingDirectory=/opt/miu-relay/selfhost
+Environment=PORT=8787
+Environment=DATA_DIR=/var/lib/miu-relay
+Environment=SDK_DIR=/opt/miu-relay/sdk
+Environment=NODE_NO_WARNINGS=1
+ExecStart=/usr/bin/node server.mjs
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/miu-relay
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

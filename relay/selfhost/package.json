@@ -1,0 +1,8 @@
+{
+  "name": "miu-bridge-relay-selfhost",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.mjs" },
+  "engines": { "node": ">=22.13" },
+  "dependencies": { "ws": "^8.18.0" }
+}

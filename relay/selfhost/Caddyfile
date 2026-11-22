@@ -1,0 +1,9 @@
+# /etc/caddy/Caddyfile: the certificate, and the caller's address in X-Forwarded-For.
+relay.example.com {
+	reverse_proxy 127.0.0.1:8787 {
+		# A tool call can wait for the phone's owner, so do not cut a quiet answer short.
+		transport http {
+			response_header_timeout 11m
+		}
+	}
+}
