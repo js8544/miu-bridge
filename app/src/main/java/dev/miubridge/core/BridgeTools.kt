@@ -43,7 +43,7 @@ class BridgeTools(private val context: android.content.Context, private val phon
     private val feedbackOpen get() = feedback?.open == true
 
     private val feedbackSpec = CommandSpec(
-        "Tell the makers of this phone bridge that a tool did not behave as its description says: it did something else, " +
+        "Tell the makers of Miu Bridge that a tool did not behave as its description says: it did something else, " +
             "or it reported success but the result was wrong. Not for your own mistakes, and not for an app on the phone " +
             "behaving oddly. Describe only the tool's behaviour: never copy screen text, messages, names, codes or other " +
             "private data. The owner can read every note in the app.",

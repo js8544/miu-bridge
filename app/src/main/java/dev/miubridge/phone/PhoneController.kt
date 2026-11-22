@@ -41,7 +41,6 @@ import kotlin.concurrent.thread
 data class PhoneState(
     val shellReady: Boolean = false,
     val a11yReady: Boolean = false,
-    val displayId: Int = -1,
     val message: String = "",
     /** When an agent last acted on the background display (elapsedRealtime), 0 if never. */
     val lastUsedAt: Long = 0,
@@ -114,7 +113,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         lastSnapshot = null
         ScreenReaderService.targetDisplay = -1
         screenKeeper.release()
-        _state.update { it.copy(shellReady = false, displayId = -1, message = context.getString(R.string.phone_closed)) }
+        _state.update { it.copy(shellReady = false, message = context.getString(R.string.phone_closed)) }
         if (h != null) thread(name = "phone-close") {
             runCatching { h.call("quit", timeoutMs = 2_000) }
             h.close()
@@ -615,7 +614,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         return checked(s, p.getInt("x"), p.getInt("y"))
     }
 
-    private class Located(val x: Int, val y: Int, val node: AccessibilityNodeInfo?, val editable: Boolean)
+    private class Located(val x: Int, val y: Int, val node: AccessibilityNodeInfo?)
 
     /**
      * Where the element named by [target] is right now. A ref is an element, not a spot: its live
@@ -676,7 +675,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         }
         if (!entry.enabled) throw BadRequest("that element is disabled", "not_actionable")
 
-        val node = entry.handle as? AccessibilityNodeInfo ?: return Located(entry.x, entry.y, null, entry.editable)
+        val node = entry.handle as? AccessibilityNodeInfo ?: return Located(entry.x, entry.y, null)
         fun box() = Rect().also(node::getBoundsInScreen)
         var rect = box()
         // Wait for it to stop moving (a list still loading, an animation), up to about a second.
@@ -692,7 +691,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         if (rect.isEmpty || x !in 0 until s.width || y !in 0 until s.height) {
             throw BadRequest("that element is not on the visible part of the screen; scroll to it and take a new phone_snapshot", "not_actionable")
         }
-        return Located(x, y, node, entry.editable)
+        return Located(x, y, node)
     }
 
     /** Waits until [target] is on the screen, or (state "gone") until it no longer is. */
@@ -777,7 +776,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         // A helper that outlived this process keeps the display it already made; go by what it reports.
         screen = Screen(id, made.optInt("width", width), made.optInt("height", height), made.optInt("dpi", dpi))
         ScreenReaderService.targetDisplay = id
-        _state.update { it.copy(shellReady = true, displayId = id, message = context.getString(R.string.phone_ready)) }
+        _state.update { it.copy(shellReady = true, message = context.getString(R.string.phone_ready)) }
         ensureAccessibility(client, id)
     }
 

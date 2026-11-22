@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit
  * computer or an open port. Each relay message is one MCP request; the answer goes back on the
  * same socket. Reconnects with backoff until stopped.
  */
-class RelayClient(private val context: Context, private val server: McpServer?) {
+class RelayClient(private val context: Context, private val server: McpServer) {
     data class State(val connected: Boolean = false, val message: String = "")
 
     private val account = Account(context)
@@ -42,7 +42,7 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
         val deviceId = account.deviceId
         val deviceKey = account.deviceKey
         if (deviceId == null || deviceKey == null) {
-            _state.value = State(false, context.getString(R.string.relay_signed_out))
+            _state.value = State(false, context.getString(R.string.relay_off_here))
             return
         }
         val url = account.baseUrl.replaceFirst("http", "ws") + "/d/$deviceId/connect"
@@ -117,7 +117,7 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
             if (text == "pong") return
             scope.launch {
                 val req = runCatching { JSONObject(text) }.getOrNull() ?: return@launch
-                val reply = (server ?: return@launch).handle(req.optString("method"), req.optString("authorization"), req.optString("body").toByteArray())
+                val reply = server.handle(req.optString("method"), req.optString("authorization"), req.optString("body").toByteArray())
                 val out = JSONObject().put("id", req.optString("id")).put("status", reply.status).put("ms", reply.ms)
                 reply.text?.let { out.put("body", it) }
                 webSocket.send(out.toString())

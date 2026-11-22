@@ -11,7 +11,7 @@ class AppConsent(context: Context) {
 
     val acceptedNotice: Boolean get() = prefs.getInt("notice_version", 0) >= NOTICE_VERSION
 
-    fun acceptNotice() = prefs.edit().putInt("notice_version", NOTICE_VERSION).putLong("notice_at", System.currentTimeMillis()).apply()
+    fun acceptNotice() = prefs.edit().putInt("notice_version", NOTICE_VERSION).apply()
 
     companion object {
         /** Raise when the risk notice changes in substance; owners are then shown it again. */

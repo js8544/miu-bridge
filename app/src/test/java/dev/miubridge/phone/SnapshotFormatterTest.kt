@@ -47,7 +47,7 @@ class SnapshotFormatterTest {
         """.trimIndent()
         assertEquals(expected, snap.text)
         assertEquals(6, snap.refs.size)
-        assertEquals(UiRef(540, 450, true, null, role = "input"), snap.refs["e3"])
+        assertEquals(UiRef(540, 450, null, role = "input"), snap.refs["e3"])
         // the button is clipped to the display: (2200 + 2340) / 2
         assertEquals(2270, snap.refs["e6"]!!.y)
         assertFalse(snap.text.contains("secret"))

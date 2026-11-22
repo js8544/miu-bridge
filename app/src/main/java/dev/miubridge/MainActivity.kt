@@ -37,7 +37,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -79,15 +78,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -399,9 +398,9 @@ class MainActivity : ComponentActivity() {
     // ---- first-run guide ----
 
     /**
-     * First run for someone who has never heard of developer options: what is about to happen, sign
-     * in, give the phone its permission one action at a time, hand the instructions to the agent, see
-     * it arrive. Which step shows follows from the phone's real state, so leaving for a system page
+     * First run for someone who has never heard of developer options: what is about to happen, give
+     * the phone its permission one action at a time, hand the instructions to the agent, see it
+     * arrive. Which step shows follows from the phone's real state, so leaving for a system page
      * and coming back lands on the right one.
      */
     @Composable
@@ -422,15 +421,15 @@ class MainActivity : ComponentActivity() {
         var noticed by remember { mutableStateOf(consent.acceptedNotice) }
         val step = when {
             !noticed -> 0
-            !ready -> 2
-            !handedOver -> 3
-            else -> 4
+            !ready -> 1
+            !handedOver -> 2
+            else -> 3
         }
 
         Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (step == 0) stringResource(R.string.guide_welcome_label) else stringResource(R.string.guide_progress, (step - 1).coerceIn(1, 3), 3),
+                    if (step == 0) stringResource(R.string.guide_welcome_label) else stringResource(R.string.guide_progress, step, 3),
                     style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onDone) { Text(stringResource(R.string.guide_skip)) }
@@ -457,7 +456,7 @@ class MainActivity : ComponentActivity() {
                         Text(stringResource(R.string.guide0_start))
                     }
                 }
-                2 -> if (paired || preparedElsewhere) {
+                1 -> if (paired || preparedElsewhere) {
                     // Nothing for the owner to decide here: start by ourselves.
                     LaunchedEffect(Unit) {
                         if (!BridgeService.running.value) BridgeService.start(this@MainActivity)
@@ -484,51 +483,43 @@ class MainActivity : ComponentActivity() {
                     }
                 } else GuideStep(R.string.guide_perm_title, R.string.guide_perm_body) {
                     var computerHelp by remember { mutableStateOf(false) }
-                    // Wireless debugging arrived with Android 11; before it only a computer can open this door.
-                    if (android.os.Build.VERSION.SDK_INT < 30) {
-                        Text(stringResource(R.string.guide_perm_old), style = MaterialTheme.typography.bodyMedium)
-                        Button(onClick = { computerHelp = true }, modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) {
-                            Text(stringResource(R.string.guide_perm_computer))
+                    val (devOn, wirelessOn, wifi) = remember(resumes) {
+                        Triple(
+                            Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1,
+                            WirelessAdb.isOn(this@MainActivity),
+                            onWifi(),
+                        )
+                    }
+                    val done = listOf(wifi || wirelessOn, devOn, wirelessOn, false)
+                    val current = done.indexOfFirst { !it }
+                    PermStep(1, R.string.perm_wifi_title, done[0], current == 0) {
+                        Text(stringResource(R.string.perm_wifi_body), style = MaterialTheme.typography.bodyMedium)
+                        Button(onClick = { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                            Text(stringResource(R.string.perm_wifi_action))
                         }
-                    } else {
-                        val (devOn, wirelessOn, wifi) = remember(resumes) {
-                            Triple(
-                                Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1,
-                                WirelessAdb.isOn(this@MainActivity),
-                                onWifi(),
-                            )
+                    }
+                    PermStep(2, R.string.perm_dev_title, done[1], current == 1) {
+                        Instructions(R.string.perm_dev_1, R.string.perm_dev_2, R.string.perm_dev_3)
+                        Sketch(listOf(R.string.sketch_about_other to null, R.string.sketch_build to R.string.sketch_tap7))
+                        Button(onClick = { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                            Text(stringResource(R.string.guide1_open_about))
                         }
-                        val done = listOf(wifi || wirelessOn, devOn, wirelessOn, false)
-                        val current = done.indexOfFirst { !it }
-                        PermStep(1, R.string.perm_wifi_title, done[0], current == 0) {
-                            Text(stringResource(R.string.perm_wifi_body), style = MaterialTheme.typography.bodyMedium)
-                            Button(onClick = { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                                Text(stringResource(R.string.perm_wifi_action))
-                            }
+                    }
+                    PermStep(3, R.string.perm_wireless_title, done[2], current == 2) {
+                        Instructions(R.string.perm_wireless_1, R.string.perm_wireless_2, R.string.perm_wireless_3)
+                        Sketch(listOf(R.string.sketch_usb to null, R.string.sketch_wireless to R.string.sketch_switch_on))
+                        Button(onClick = { WirelessPairing.openWirelessDebuggingSettings(this@MainActivity) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                            Text(stringResource(R.string.perm_wireless_action))
                         }
-                        PermStep(2, R.string.perm_dev_title, done[1], current == 1) {
-                            Instructions(R.string.perm_dev_1, R.string.perm_dev_2, R.string.perm_dev_3)
-                            Sketch(listOf(R.string.sketch_about_other to null, R.string.sketch_build to R.string.sketch_tap7))
-                            Button(onClick = { startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                                Text(stringResource(R.string.guide1_open_about))
-                            }
+                        OutlinedButton(onClick = { computerHelp = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            Text(stringResource(R.string.guide1_no_wireless))
                         }
-                        PermStep(3, R.string.perm_wireless_title, done[2], current == 2) {
-                            Instructions(R.string.perm_wireless_1, R.string.perm_wireless_2, R.string.perm_wireless_3)
-                            Sketch(listOf(R.string.sketch_usb to null, R.string.sketch_wireless to R.string.sketch_switch_on))
-                            Button(onClick = { WirelessPairing.openWirelessDebuggingSettings(this@MainActivity) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                                Text(stringResource(R.string.perm_wireless_action))
-                            }
-                            OutlinedButton(onClick = { computerHelp = true }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                Text(stringResource(R.string.guide1_no_wireless))
-                            }
-                        }
-                        PermStep(4, R.string.perm_pair_title, done[3], current == 3) {
-                            Instructions(R.string.perm_pair_1, R.string.perm_pair_2, R.string.perm_pair_3, R.string.perm_pair_4)
-                            Sketch(listOf(R.string.sketch_pair_code to R.string.sketch_tap, R.string.sketch_code to R.string.sketch_type_this))
-                            Button(onClick = { startPairing() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                                Text(stringResource(R.string.guide1_pair))
-                            }
+                    }
+                    PermStep(4, R.string.perm_pair_title, done[3], current == 3) {
+                        Instructions(R.string.perm_pair_1, R.string.perm_pair_2, R.string.perm_pair_3, R.string.perm_pair_4)
+                        Sketch(listOf(R.string.sketch_pair_code to R.string.sketch_tap, R.string.sketch_code to R.string.sketch_type_this))
+                        Button(onClick = { startPairing() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                            Text(stringResource(R.string.guide1_pair))
                         }
                     }
                     if (computerHelp) ComputerSetupDialog(say, onDismiss = { computerHelp = false }) {
@@ -536,7 +527,7 @@ class MainActivity : ComponentActivity() {
                         setPreparedElsewhere(true)
                     }
                 }
-                3 -> {
+                2 -> {
                     val token = (application as App).token.value
                     // The phone goes on the relay by itself, so the one text works for an agent anywhere.
                     var linking by remember { mutableStateOf(!linked) }
@@ -820,7 +811,7 @@ class MainActivity : ComponentActivity() {
 
     // ---- connect ----
 
-    /** How to hand this phone to an agent, and the account that makes it reachable from other networks. */
+    /** How to hand this phone to an agent, and the switch that makes it reachable from other networks. */
     @Composable
     private fun ConnectCard(
         account: Account, linked: Boolean, running: Boolean, relay: RelayClient.State,
@@ -860,18 +851,17 @@ class MainActivity : ComponentActivity() {
                     colors = clearItem(),
                 )
             } else {
-                var confirmSignOut by remember { mutableStateOf(false) }
-                val email = account.email.orEmpty()
+                var confirmOff by remember { mutableStateOf(false) }
                 var usage by remember { mutableStateOf<Account.Usage?>(null) }
-                // Asked once, right after signing in (and once for owners who signed in before it existed).
+                // Asked once, when remote access is first on.
                 var askTrace by remember { mutableStateOf(!(application as App).traces.asked) }
                 if (askTrace) TraceDialog { join ->
                     (application as App).traces.setEnabled(join)
                     askTrace = false
                 }
-                LaunchedEffect(email, relay.connected) { usage = account.usage() }
+                LaunchedEffect(relay.connected) { usage = account.usage() }
                 ListItem(
-                    headlineContent = { Text(email.ifEmpty { stringResource(R.string.remote_title) }) },
+                    headlineContent = { Text(stringResource(R.string.remote_title)) },
                     supportingContent = {
                         Column {
                             Text(
@@ -895,109 +885,25 @@ class MainActivity : ComponentActivity() {
                     },
                     leadingContent = {
                         Box(Modifier.size(40.dp).background(MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
-                            if (email.isEmpty()) Icon(AppIcons.Cloud, null, tint = MaterialTheme.colorScheme.onPrimary)
-                            else Text(email.take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.titleMedium)
+                            Icon(AppIcons.Cloud, null, tint = MaterialTheme.colorScheme.onPrimary)
                         }
                     },
-                    trailingContent = { TextButton(onClick = { confirmSignOut = true }) { Text(stringResource(R.string.action_turn_off)) } },
+                    trailingContent = { TextButton(onClick = { confirmOff = true }) { Text(stringResource(R.string.action_turn_off)) } },
                     colors = clearItem(),
                 )
-                if (confirmSignOut) AlertDialog(
-                    onDismissRequest = { confirmSignOut = false },
-                    title = { Text(stringResource(R.string.signout_title)) },
-                    text = { Text(stringResource(R.string.signout_body)) },
+                if (confirmOff) AlertDialog(
+                    onDismissRequest = { confirmOff = false },
+                    title = { Text(stringResource(R.string.remote_turn_off_title)) },
+                    text = { Text(stringResource(R.string.remote_turn_off_body)) },
                     confirmButton = {
-                        TextButton(onClick = { confirmSignOut = false; scope.launch { account.unlink(); onAccountChanged() } }) { Text(stringResource(R.string.action_turn_off)) }
+                        TextButton(onClick = { confirmOff = false; scope.launch { account.unlink(); onAccountChanged() } }) { Text(stringResource(R.string.action_turn_off)) }
                     },
-                    dismissButton = { TextButton(onClick = { confirmSignOut = false }) { Text(stringResource(R.string.action_cancel)) } },
+                    dismissButton = { TextButton(onClick = { confirmOff = false }) { Text(stringResource(R.string.action_cancel)) } },
                 )
             }
         }
     }
 
-    /** Email + emailed code. The first sign-in creates the account. */
-    @Composable
-    private fun SignInForm(account: Account, say: (String) -> Unit, onAccountChanged: () -> Unit, modifier: Modifier = Modifier.padding(20.dp), showTitle: Boolean = true) {
-        val scope = rememberCoroutineScope()
-        var email by remember { mutableStateOf("") }
-        var code by remember { mutableStateOf("") }
-        var codeSent by remember { mutableStateOf(false) }
-        var busy by remember { mutableStateOf(false) }
-        var cooldown by remember { mutableIntStateOf(0) }
-        LaunchedEffect(cooldown) { if (cooldown > 0) { delay(1_000); cooldown-- } }
-        val needEmail = stringResource(R.string.need_email)
-        val sentTo = stringResource(R.string.code_sent, email.trim())
-        // The message about what happened shows at the bottom of the screen: get the keyboard out of its way.
-        val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-        fun sendCode() {
-            if (email.isBlank()) { say(needEmail); return }
-            keyboard?.hide()
-            busy = true
-            scope.launch {
-                val sent = account.sendCode(email.trim())
-                busy = false
-                if (sent.codeMayArrive) { codeSent = true; cooldown = 60 }
-                say(sent.message ?: sentTo)
-            }
-        }
-        Column(modifier) {
-            if (showTitle) {
-                Text(stringResource(R.string.signin_title), style = MaterialTheme.typography.titleMedium)
-                Text(
-                    stringResource(R.string.signin_body),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
-                )
-            }
-            OutlinedTextField(
-                value = email, onValueChange = { email = it },
-                label = { Text(stringResource(R.string.field_email)) },
-                leadingIcon = { Icon(Icons.Filled.Email, null) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            AnimatedVisibility(codeSent) {
-                OutlinedTextField(
-                    value = code, onValueChange = { code = it.filter(Char::isDigit).take(6) },
-                    label = { Text(stringResource(R.string.field_code)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                )
-            }
-            FilledTonalButton(
-                onClick = {
-                    if (!codeSent) sendCode() else {
-                        keyboard?.hide()
-                        busy = true
-                        scope.launch {
-                            val error = account.signIn(email.trim(), code)
-                            busy = false
-                            if (error != null) say(error) else onAccountChanged()
-                        }
-                    }
-                },
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-            ) {
-                if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Text(stringResource(if (codeSent) R.string.action_sign_in else R.string.action_get_code))
-            }
-            if (codeSent) {
-                TextButton(onClick = { sendCode() }, enabled = cooldown == 0 && !busy, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                    Text(if (cooldown > 0) stringResource(R.string.action_resend_wait, cooldown) else stringResource(R.string.action_resend))
-                }
-            }
-        }
-    }
-
-    /**
-     * The complete hand-off for any agent: the address, the token, and both ways to use them. The
-     * agent picks MCP or scripts. An agent that keeps secrets in a credential store asks for the
-     * token again on its own, which is why the sheet also offers each value separately.
-     */
     /**
      * What an agent needs to reach this phone, wherever it runs: the address on the phone's own Wi-Fi
      * ([lan], null without Wi-Fi) and the one through the relay ([remote], null when remote access is off).

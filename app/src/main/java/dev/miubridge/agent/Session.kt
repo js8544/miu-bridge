@@ -34,9 +34,6 @@ class Session private constructor(val file: File, val id: String, private val en
         append(JSONObject().put("type", "compaction").put("summary", summary).put("firstKeptEntryId", firstKeptEntryId)
             .put("tokensBefore", tokensBefore).put("details", details))
 
-    fun appendModelChange(provider: String, modelId: String): JSONObject =
-        append(JSONObject().put("type", "model_change").put("provider", provider).put("modelId", modelId))
-
     @Synchronized
     private fun append(entry: JSONObject): JSONObject {
         entry.put("id", newId()).put("parentId", leafId ?: JSONObject.NULL).put("timestamp", iso(Date()))

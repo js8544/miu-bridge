@@ -2,10 +2,10 @@ package dev.miubridge.core
 
 import org.json.JSONObject
 
-/** One parameter of a command, as Muse sees it in `commands_v2`. */
+/** One parameter of a command, as an agent sees it in the tool's schema. */
 data class Param(val type: String, val description: String)
 
-/** A command the device offers Muse. */
+/** A command the phone offers agents. */
 data class CommandSpec(
     val description: String,
     val required: Map<String, Param> = emptyMap(),
@@ -24,7 +24,7 @@ sealed class CommandResult {
     data class Error(val message: String, val code: String = "failed") : CommandResult()
 }
 
-/** What a transport (MCP server, later others) calls; the phone layer implements it. */
+/** What the MCP server calls; the phone layer implements it. */
 interface CommandHandler {
     /** Command name → spec. Names are tool names: lowercase with underscores, such as `phone_tap`. */
     fun specs(): Map<String, CommandSpec>

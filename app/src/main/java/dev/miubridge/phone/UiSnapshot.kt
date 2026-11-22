@@ -35,7 +35,7 @@ data class UiWindow(val title: String?, val root: UiNode)
  * was when the snapshot was taken: shown to the agent, and checked when several elements look alike.
  */
 data class UiRef(
-    val x: Int, val y: Int, val editable: Boolean, val handle: Any?,
+    val x: Int, val y: Int, val handle: Any?,
     val role: String = "", val name: String? = null, val id: String? = null, val enabled: Boolean = true,
 ) {
     fun sameElementAs(other: UiRef) = role == other.role && name == other.name && id == other.id
@@ -145,7 +145,7 @@ object SnapshotFormatter {
                     val y = (maxOf(node.top, 0) + minOf(node.bottom, height)) / 2
                     val name = own ?: borrowed
                     val id = node.viewId?.substringAfter(":id/")?.takeIf { it.isNotBlank() }
-                    refs[ref] = UiRef(x, y, node.editable, node.handle, role(node), name, id, node.enabled)
+                    refs[ref] = UiRef(x, y, node.handle, role(node), name, id, node.enabled)
                     lines += line(node, ref, depth, name, x, y)
                     childCovered = covered || borrowed != null
                 }

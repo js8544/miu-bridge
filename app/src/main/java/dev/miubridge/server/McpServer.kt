@@ -146,7 +146,7 @@ class McpServer(
             "initialize" -> rpcResult(id, JSONObject()
                 .put("protocolVersion", params.optString("protocolVersion").ifEmpty { PROTOCOL_VERSION })
                 .put("capabilities", JSONObject().put("tools", JSONObject()))
-                .put("serverInfo", JSONObject().put("name", "miu-bridge").put("version", "0.1.0"))
+                .put("serverInfo", JSONObject().put("name", "miu-bridge").put("version", dev.miubridge.BuildConfig.VERSION_NAME))
                 .put("instructions", handler.guideMarkdown()))
             "ping" -> rpcResult(id, JSONObject())
             "tools/list" -> rpcResult(id, JSONObject().put("tools", JSONArray().apply {

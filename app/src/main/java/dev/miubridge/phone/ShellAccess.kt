@@ -4,8 +4,8 @@ import java.io.Closeable
 import java.io.IOException
 
 /**
- * A way to run commands as Android's `shell` user. Today [AdbShell] reaches adbd over loopback TCP
- * (after `adb tcpip 5555`); TLS wireless-debugging pairing can implement this interface later.
+ * A way to run commands as Android's `shell` user: [AdbShell] reaches adbd on this phone, over
+ * wireless debugging's TLS port or the plain one `adb tcpip 5555` opens.
  */
 interface ShellAccess : Closeable {
     /** Runs [command] with `sh -c`, feeding [stdin] if given, and returns the combined output. */
