@@ -912,32 +912,30 @@ class MainActivity : ComponentActivity() {
         val both = lan != null && remote != null
         val where = when {
             both -> """
-                Two addresses reach the same phone and the same tools. Use the one that fits where you run:
-                - On the same Wi-Fi as the phone (direct, fastest, not counted): $lan
-                - Anywhere else (through a relay; counted against a monthly allowance): $remote
-                If you cannot tell, try the first and fall back to the second. The Wi-Fi address changes when
-                the phone changes network; the other one stays the same.
+                Address: two reach the same phone; use the one that fits where you run.
+                - On the phone's own Wi-Fi (direct, fastest): $lan
+                - Anywhere else (through a relay): $remote
+                The Wi-Fi address changes when the phone changes network; the other stays the same.
             """.trimIndent()
-            remote != null -> "URL: $remote"
-            else -> "URL: ${lan ?: "http://<phone-ip>:${McpServer.DEFAULT_PORT}/mcp"}\nIt works while you are on the same Wi-Fi as the phone."
+            remote != null -> "Address: $remote"
+            else -> "Address: ${lan ?: "http://<phone-ip>:${McpServer.DEFAULT_PORT}/mcp"}\nIt works while you are on the same Wi-Fi as the phone."
         }
-        val url = if (both) "<URL>" else remote ?: lan ?: "<URL>"
+        val url = if (both) "<address>" else remote ?: lan ?: "<address>"
         return """
-Miu Bridge: operate apps on my Android phone, on a background display.
+Miu Bridge: operate apps on my Android phone, on a background display I do not see.
 
 $where
 Token: $token
-Send the token as the header "Authorization: Bearer <token>". Keep it secret.
+The token is the key to the phone. Keep it secret.
 
-Use it whichever way suits you; both reach the same phone and the same tools${if (both) " (<URL> is the address you chose)" else ""}:
-1. As an MCP server (Streamable HTTP) at the URL, with that header.
+Connect either way; the tools are the same:
+1. As an MCP server (Streamable HTTP) at the address, with the header "Authorization: Bearer <token>".
    Claude Code: claude mcp add --transport http phone "$url" --header "Authorization: Bearer $token"
-2. From scripts in your own sandbox, with the SDK (JavaScript or Python, no dependencies):
-   curl -fsSO $relay/sdk/miu-bridge.mjs   # or miu_bridge.py
+2. From scripts in your own sandbox, with the SDK (Python or JavaScript). Guide: $relay/sdk/
    export MIU_BRIDGE_URL="$url"
    export MIU_BRIDGE_TOKEN="$token"
-   Guide: $relay/sdk/
-If you call the URL without the SDK, send a User-Agent header that names your client.
+   export MIU_BRIDGE_E2E=1   # optional: end-to-end encryption, so the relay cannot read what passes
+If you call the address with your own HTTP client, send a User-Agent header that names it.
         """.trim()
     }
 

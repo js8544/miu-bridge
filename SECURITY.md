@@ -11,10 +11,13 @@ issue for a vulnerability. You will get an answer within a few days.
 ## What the design promises
 
 - Agents act only on a background display. The owner's main screen is never read or touched.
-- Every request needs the phone's token, and the phone checks it. The relay cannot act on a phone by itself.
+- Every request needs the phone's token, and the phone checks it.
 - The relay forwards requests and answers. It does not store or log their content: no screen text,
-  no screenshots, no tool arguments. It stores account email, device name, hashed keys,
-  last-seen time and a count of remote tool calls per account per month (`relay/migrations`).
+  no screenshots, no tool arguments. It stores the device name, hashed keys, last-seen time and a count
+  of remote tool calls per phone per month (`relay/migrations`); for a phone that signed in to an account
+  with an earlier version, also that account's email.
+- A plain request passes through the relay readable, token included, protected by HTTPS on each side
+  of it. With the SDK's end-to-end encryption the relay carries only ciphertext and never sees the token.
 - The experience improvement program is off unless the owner joins it in the app. While joined, the
   phone reports metadata about each tool call under a random install id that is not linked to the
   account: tool name, package name of the app in front, success or error code, duration, how the

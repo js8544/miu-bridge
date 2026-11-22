@@ -60,8 +60,8 @@ console.log(screen.texts());
 Every action returns a `Screen`: `.text` (one line per element, `[e5] button "Send" @540,1620 #send_btn`),
 `.lines`, `.texts()`, `.find(regex)` (a ref), `.package`, `.warning`, `.notice`, `.restarted`, `.loading`, `.screenshot`.
 
-Every method that returns a `Screen` takes `screenshot=True` (JavaScript: a last argument `{screenshot: true}`),
-and the picture of the new screen comes back in the same call as `.screenshot`. For an app that exposes
+The actions take `screenshot=True` (JavaScript: a last argument `{screenshot: true}`), and the picture of the
+new screen comes back in the same call as `.screenshot`. For an app that exposes
 no element tree the picture comes without asking.
 
 Failures raise `PhoneError`: the message says what to do, and `.code` is stable for branching:
@@ -127,13 +127,14 @@ they are no larger than before. The phone needs Miu Bridge 0.2.5 or later. In Py
   the SDK, up to twice, with the same request id. The phone answers a repeat with its first result, so a
   retried tap is not a second tap. Calling the address yourself, pass your own `request_id` argument
   (any string, new for each action) and repeat the call with the same one.
-- Through the relay, each tool call counts once against the owner's monthly allowance (1,000 on the free
-  plan), whatever it does on the phone: a `script(js)` with twenty steps is one call. Calls on the phone's own
-  Wi-Fi do not count. When it runs out, calls fail with `quota_exceeded` until next month.
-- Each call takes about a second through the relay (milliseconds on the same Wi-Fi). For a long run of
-  steps you already know, `script(js)` runs them on the phone in one request: inside it, `call(name, args)`
-  runs a tool, `print(x)` adds output, `sleep(ms)` waits. If it fails midway the steps already done are not
-  undone; the error says how many succeeded.
+- Through the relay each call takes about half a second or more and counts once against the phone's monthly
+  allowance (1,000 on the hosted relay), whatever it does: a `script(js)` with twenty steps is one call. On the
+  phone's own Wi-Fi calls take milliseconds and are not counted.
+- `script(js)` runs steps on the phone in one request: inside it, `call(name, args)` runs a tool, `print(x)`
+  adds output, `sleep(ms)` waits. If it fails midway the steps already done are not undone; the error says
+  how many succeeded.
+- `call(tool, **arguments)` (JavaScript: `call(tool, args)`) runs any tool by its name, for one this table
+  does not wrap.
 - `launch()` returns once the app's first screen is there, and an action waits out a loading indicator it
   started (about 6 s at most). If the screen has `.loading` set it is still loading: `wait()` for what you expect.
 - In apps with an account behind them the phone holds actions to a human tempo and may refuse to go

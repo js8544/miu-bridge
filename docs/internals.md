@@ -35,9 +35,9 @@ Phones without a Wireless debugging page (HarmonyOS 4) still need a computer onc
 
 ## Connect an agent
 
-Any agent on any device works. On the phone tap 连接一个 agent (Connect an agent), choose the network
-path (any network goes through the relay; same Wi-Fi does not) and copy the connection details: one text with
-the address, the token and both ways to use them. The agent decides which.
+Any agent on any device works. On the phone tap 连接一个 agent (Connect an agent) and copy the connection
+details: one text with the address on the phone's own Wi-Fi, the address through the relay (when remote
+access is on), the token and both ways to use them. The agent decides which.
 
 Agents that write scripts in their own sandbox do not need MCP: `sdk/miu_bridge.py` and
 `sdk/miu-bridge.mjs` (no dependencies) turn `phone.tap("text=Send")` into a request to the phone.
@@ -53,8 +53,9 @@ app (toggle it with the phone icon in the app bar; drag it anywhere); tap it for
 window 600 dp or wider (an unfolded foldable, a tablet) the display gets a pane of its own beside the
 content instead.
 
-Tools: `phone_apps`, `phone_launch`, `phone_snapshot`, `phone_screenshot`, `phone_tap`,
-`phone_long_press`, `phone_swipe`, `phone_type`, `phone_key`, `phone_open_url`, `phone_handoff`.
+The tools and what agents are told about them are in `phone/PhoneSpecs.kt` (the phone tools and the core
+guide), `core/ScriptRunner.kt` (`phone_script`) and `core/BridgeTools.kt` (app notes, feedback, errors).
+Each fact is stated once: a tool's description says what that tool does, the guide says how to work.
 
 ## Limits
 
@@ -99,8 +100,7 @@ forwards such a body as it is and counts every one as a tool call, since it cann
 
 The UI is Jetpack Compose Material 3 (`ui/Theme.kt` holds the palette). All user-facing text lives in
 `tools/strings.py`, one table with English and Chinese side by side; run it to regenerate
-`res/values/strings.xml` and `res/values-zh/strings.xml`. The relay returns stable error `code`s that
-`server/Account.kt` maps to those strings.
+`res/values/strings.xml` and `res/values-zh/strings.xml`.
 
 ## On-phone agent models
 

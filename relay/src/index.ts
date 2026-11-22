@@ -2,7 +2,7 @@
  * Miu Bridge relay.
  *
  * A phone registers itself and gets a device id and key, with no account; it then keeps one outbound
- * WebSocket to that device's Durable Object. Accounts (D1) remain for phones that signed in. MCP clients (Muse, Claude
+ * WebSocket to that device's Durable Object. Accounts (D1) remain for phones that signed in. MCP clients (Claude
  * Code, …) POST to the device's /mcp URL and the object forwards each request over the socket and
  * returns the phone's answer.
  *
@@ -71,13 +71,13 @@ const CODE_TTL_MS = 10 * 60_000;
 const RESEND_COOLDOWN_MS = 60_000;
 const MAX_SENDS_PER_HOUR = 5;
 const MAX_CODE_ATTEMPTS = 5;
-/** Remote tool calls per calendar month (UTC), by plan; null is unlimited. */
 const MAX_TRACE_EVENTS = 200; // per request
 const MAX_FEEDBACK_NOTES = 20; // per request
 const MAX_FEEDBACK_CHARS = 1000; // per field
 const MAX_FEEDBACK_RECENT = 5; // trace events attached to a note
 const INSTALL_ID = /^[A-Za-z0-9-]{16,64}$/;
 const SELECTORS = new Set(["ref", "text", "id", "role", "xy"]);
+/** Remote tool calls per calendar month (UTC), by plan; null is unlimited. */
 const PLAN_LIMITS: Record<string, number | null> = { free: 1000, paid: null };
 
 export default {

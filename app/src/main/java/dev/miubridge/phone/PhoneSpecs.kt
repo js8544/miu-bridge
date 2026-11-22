@@ -5,58 +5,54 @@ import dev.miubridge.core.Param
 
 /** Tool contracts and the agent guide for the phone layer. */
 internal object PhoneSpecs {
-    private const val COORDS = "Coordinates are pixels of the background display (the same space as the @x,y in snapshots)."
-    private const val RETURNS = "Waits for the screen to settle (up to ~3 s) and returns the new snapshot."
+    private const val RETURNS = "Returns the snapshot of the screen once it has settled."
 
-    private const val TARGETS = "An element is named by a ref from the latest snapshot (e12) or by a selector that needs no snapshot: " +
+    private val ref = Param("string", "The element: a ref from the latest snapshot (e12), or a selector that needs no snapshot: " +
         "text=Send (contains), text=\"Send\" (exact), id=send_btn (the #id in snapshots), role=button[name=\"Send\"], " +
-        "each optionally followed by \" >> nth=N\". A selector must match exactly one element and is waited for up to 3 s. " +
-        "The element is located at the moment of the action, so it is hit where it is now even if the page has shifted."
-    private val ref = Param("string", "A ref from the latest snapshot (\"e12\") or a selector (\"text=Send\", \"id=send_btn\", \"role=button[name=\\\"Send\\\"]\").")
-    private val shot = Param("boolean", "true to get a JPEG of the screen with the snapshot, in the same result (image pixels × `scale` = display pixels).")
-    private val x = Param("integer", "X in background-display pixels.")
-    private val y = Param("integer", "Y in background-display pixels.")
+        "each optionally followed by \" >> nth=N\". A selector must match exactly one element and is waited for up to 3 s.")
+    private val shot = Param("boolean", "true to also get a JPEG of the screen in the same result (image pixels × `scale` = display pixels).")
+    private val x = Param("integer", "X in display pixels, as in a snapshot's @x,y.")
+    private val y = Param("integer", "Y in display pixels, as in a snapshot's @x,y.")
 
     val all: Map<String, CommandSpec> = mapOf(
         "phone_apps" to CommandSpec(
-            "List launchable apps on the phone (label, package). Apps marked blocked are closed to agents by the owner's app rule.",
+            "List the apps on the phone that can be opened (label, package). `blocked` marks the ones the owner has closed to agents.",
             optional = mapOf("query" to Param("string", "Only apps whose label or package contains this, e.g. \"mail\". Leave out for all of them.")),
         ),
         "phone_status" to CommandSpec(
-            "The phone's state, read without touching the display: `locked`, `ready` (the background display is up), its `display` " +
-                "(id, width, height, dpi), the `package` in front on it, `reader` (element trees are available), `restarted` " +
-                "(the display was restarted and the apps on it closed; not yet reported in a result), `handed_off` (the package " +
-                "given to the owner by phone_handoff and still open on their screen, so phone_takeback can bring it back; null if none), " +
-                "and the app `version`.",
+            "The phone's state, read without touching the display: `locked`, `ready` (the background display is up), `display` " +
+                "(id, width, height, dpi), `package` (the app in front on it), `reader` (element trees are available), `restarted` " +
+                "(the display was restarted and its apps closed, not yet reported in a result), `handed_off` (the app the owner " +
+                "still holds from phone_handoff, or null) and the app `version`.",
         ),
         "phone_launch" to CommandSpec(
-            "Open an app on the background display (or bring its task there to the front). Apps the owner has closed to agents are refused (`blocked_app`). $RETURNS",
+            "Open an app on the background display, or bring it to the front there. An app the owner has closed to agents is " +
+                "refused (`blocked_app`). Returns the snapshot once the app's first screen is there.",
             required = mapOf("package" to Param("string", "Package name from phone_apps, e.g. com.android.settings.")),
             optional = mapOf("screenshot" to shot),
             timeoutMs = 30_000,
         ),
         "phone_snapshot" to CommandSpec(
-            "Text tree of the background display: one line per element, `[ref] role \"text\" @x,y #id (flags)`, plus the foreground package. " +
-                "Every action returns a fresh snapshot with new refs. A ref still works after the screen changed as long as its element is there; " +
-                "selectors (text=, id=, role=) never go stale.",
+            "The screen as text: its size and the app in front, then one line per element, `[ref] role \"text\" @x,y #id (flags)`. " +
+                "Every action returns one, so call this only to look without acting. A ref keeps working while its element is on screen.",
             optional = mapOf("screenshot" to shot),
         ),
         "phone_screenshot" to CommandSpec(
-            "JPEG of the background display, downscaled to about 720 px wide. Multiply image pixels by `scale` to get display pixels for phone_tap.",
+            "A JPEG of the screen, about 720 px wide. Image pixels × `scale` = display pixels.",
         ),
         "phone_tap" to CommandSpec(
-            "Tap an element or a point (x,y). $TARGETS $COORDS $RETURNS",
+            "Tap an element (`ref`) or a point (`x`, `y`). $RETURNS",
             optional = mapOf("ref" to ref, "x" to x, "y" to y, "screenshot" to shot),
         ),
         "phone_long_press" to CommandSpec(
-            "Long-press an element or a point (x,y) for about 0.8 s. $TARGETS $COORDS $RETURNS",
+            "Long-press an element (`ref`) or a point (`x`, `y`) for about 0.8 s. $RETURNS",
             optional = mapOf("ref" to ref, "x" to x, "y" to y, "screenshot" to shot),
         ),
         "phone_swipe" to CommandSpec(
-            "Swipe either by direction or between two points. `direction` is the finger's movement: \"up\" moves the finger up, " +
-                "which scrolls the content to show what is below. $COORDS $RETURNS",
+            "Swipe by `direction`, or between two points. The direction is the finger's: \"up\" moves the finger up, which shows " +
+                "what is further down. $RETURNS",
             optional = mapOf(
-                "direction" to Param("string", "up | down | left | right (finger movement across the middle of the screen)."),
+                "direction" to Param("string", "up | down | left | right, across the middle of the screen."),
                 "x1" to Param("integer", "Start X."),
                 "y1" to Param("integer", "Start Y."),
                 "x2" to Param("integer", "End X."),
@@ -66,27 +62,25 @@ internal object PhoneSpecs {
             ),
         ),
         "phone_type" to CommandSpec(
-            "Replace the text of an input field (any language, including Chinese). Uses the ref if given, otherwise the focused input " +
-                "on the background display. If no field is reachable through accessibility (some apps, e.g. WeChat, hide theirs), it pastes " +
-                "the text into whatever has focus: tap the field first, then verify with phone_screenshot. Does not press Enter; use " +
-                "phone_key enter to submit. $RETURNS",
+            "Replace the text of an input field, in any language. Without `ref` it uses the field that has focus. Some apps " +
+                "(WeChat, for one) hide their fields from the element tree; the text is then pasted into whatever has focus, so tap " +
+                "the field first and check the result with a screenshot. It does not submit: use phone_key enter or the app's button. $RETURNS",
             required = mapOf("text" to Param("string", "The full new text of the field.")),
             optional = mapOf("ref" to Param("string", "The input, as a ref or a selector (e.g. role=input, id=search_box)."), "screenshot" to shot),
         ),
         "phone_key" to CommandSpec(
-            "Press a key on the background display: back, enter, or home (home closes every app on the background display, " +
-                "like swiping them away from recents). $RETURNS",
+            "Press back, enter or home. Home closes every app on the background display. $RETURNS",
             required = mapOf("key" to Param("string", "back | enter | home")),
             optional = mapOf("screenshot" to shot),
         ),
         "phone_open_url" to CommandSpec(
-            "Open a URL or deep link on the background display with the app that handles it. $RETURNS",
+            "Open a URL or deep link with the app that handles it. $RETURNS",
             required = mapOf("url" to Param("string", "Absolute URL, e.g. https://example.com or an app deep link.")),
             optional = mapOf("screenshot" to shot),
         ),
         "phone_wait" to CommandSpec(
-            "Wait until an element is on the screen, or until it is gone (a spinner, a dialog). Returns the snapshot at that moment, " +
-                "or an error after the timeout. Use it instead of guessing how long a page takes to load.",
+            "Wait until an element is on the screen, or until it is gone (a spinner, a dialog), and return the snapshot at that " +
+                "moment. Fails with `wait_timeout`. Use it instead of guessing how long a page takes to load.",
             required = mapOf("target" to Param("string", "A selector: text=…, id=…, role=…[name=…].")),
             optional = mapOf(
                 "state" to Param("string", "visible (default) or gone."),
@@ -96,57 +90,47 @@ internal object PhoneSpecs {
             timeoutMs = 30_000,
         ),
         "phone_handoff" to CommandSpec(
-            "Move the background display's top app to the owner's main screen so the owner can take over " +
-                "(payment, login, face or SMS verification, anything irreversible). The agent loses that app until phone_takeback.",
+            "Move the app in front to the owner's own screen so they can take over: payment, sign-in, face or SMS " +
+                "verification, anything irreversible. You lose that app until phone_takeback.",
         ),
         "phone_takeback" to CommandSpec(
-            "Bring the app given to the owner by phone_handoff back to the background display, exactly as the owner left it " +
-                "(same screens, same state), and return what it shows. Call it once the owner says they are done. " +
-                "Opening the app again instead would start a second copy from its home page. Only the handed-off app can be taken back.",
+            "Bring back the app given to the owner by phone_handoff, exactly as they left it, and return its snapshot. Call it " +
+                "once the owner says they are done. Opening the app again instead would start a second copy from its home page.",
         ),
     )
 
     val guide = """
-        # Phone
+        # Miu Bridge
 
-        You operate apps on this Android phone on a **background virtual display**. The owner keeps using the main screen;
-        nothing you do appears there. Never ask for or try to reach the main screen.
+        You operate apps on an Android phone, on a background display its owner does not see. Their own screen is
+        untouched, and you cannot reach it.
 
-        How to work:
-        1. `phone_apps` to find the package, then `phone_launch`. Or `phone_open_url` for a link.
-        2. Read `phone_snapshot` before acting. Each line is `[ref] role "text" @x,y #id`; act on the element (`phone_tap {ref: "e5"}`), not by guessing coordinates.
-        3. Every action waits for the UI to settle and returns a fresh snapshot. When you already know what you want next, name it
-           with a selector instead of reading for its ref: `phone_tap {ref: "text=Send"}`, `{ref: "id=tab_home"}`,
-           `{ref: "role=button[name=\"OK\"]"}`. If a selector matches several elements you get the list; add ` >> nth=N`.
-           An action waits out a loading indicator it started (a page load, a refresh), up to about 6 s; if the result
-           carries `loading: true` the screen is still loading, so `phone_wait` for the content you expect.
-        4. Use `phone_type` to fill fields (it sets text directly, no keyboard). Then `phone_key enter` or tap the send/search button.
-        5. When the tree is not enough (games, maps, canvas or web content), pass `screenshot: true` to the action or to
-           `phone_snapshot` and the picture comes back in the same result. Image pixels × `scale` = display pixels.
-        6. Scroll with `phone_swipe {direction: "up"}` to see content further down.
+        ## How to work
 
-        Coordinates are always background-display pixels.
+        1. Find the app with `phone_apps` and open it with `phone_launch`, or open a link with `phone_open_url`.
+        2. Every action returns the screen as a snapshot, one line per element: `[e5] button "Send" @540,1620 #send_btn`.
+           Act on elements, not on guessed coordinates.
+        3. Name an element by its ref (`e5`), or by a selector when you already know what you want, which saves a read:
+           `text=Send`, `text="Send"` (exact), `id=send_btn`, `role=button[name="Send"]`. If several match you get the
+           list; add ` >> nth=N`.
+        4. `phone_type` sets a field's text directly; the display shows no keyboard. Submit with `phone_key enter` or
+           the app's own button.
+        5. `phone_swipe {direction: "up"}` shows what is further down.
+        6. A result with `loading: true` is a page still loading: `phone_wait` for what you expect.
+        7. When the element tree is not enough (games, maps, web content), pass `screenshot: true` and work from the
+           picture, tapping by x,y (image pixels × `scale`). A screen with no tree at all sends its picture unasked.
+           A picture taken while the page changes can show two pages at once; take another.
 
-        Things to know about the background display:
-        - It is upright and phone-shaped, with this phone's own screen size and density. Its size is in the first line of
-          every snapshot and in `phone_status`; positions you note belong to that size.
-        - It shows no keyboard. A field that has focus takes text from `phone_type` directly.
-        - Some apps expose no element tree. Every result for such a screen comes with its picture, without asking;
-          work from it and tap by x,y. `phone_type` without a ref pastes into the focused field, so tap the field first.
-        - A screenshot taken during a page change can show two pages on top of each other; take another.
-        - On Android 12 and earlier it cannot be used while the phone is locked; the tools say so and the owner must unlock.
-        - If a result carries `restarted: true` (and a `notice` saying so), the background display was restarted and apps that were open are closed.
-          That is not the app crashing: launch it again.
+        The display is upright, with this phone's own size; the size is in the first line of every snapshot.
 
-        Pacing: in apps with an account behind them the phone holds your actions to a human tempo and, after a long run
-        of screens in one app, refuses to go further for a few minutes. This protects the owner's account from being
-        flagged; do not work around it. If a result carries a `warning` about a rate-limit or verification screen, stop
-        acting in that app and hand off to the owner.
+        ## What is not yours to do
 
-        Safety:
-        - Do not do irreversible things: no paying, transferring money, placing orders, sending money-related messages, deleting data, or changing security settings.
-        - The owner decides which apps you may open: either every app except a block list, or only the apps on an allow list.
-          `phone_apps` marks the closed ones `blocked`; opening one fails with `blocked_app`. Ask the owner instead of working around it.
-        - For payment, login, face/SMS verification, or anything that needs the owner, call `phone_handoff` and tell the owner what is waiting. When the owner says they are done, `phone_takeback` returns the same app to you where they left it; do not open it again.
+        - No paying, placing orders, transferring money, deleting data or changing security settings.
+        - Payment, sign-in, face or SMS verification, or anything else that needs the owner: `phone_handoff` moves the
+          app to their screen; tell them what is waiting. When they say they are done, `phone_takeback` returns the
+          app as they left it. Do not open it again instead.
+        - `blocked_app`: the owner has closed that app to agents (`phone_apps` marks it). Ask them.
+        - `paced`, or a `warning` in a result: the phone is keeping an app's account from looking automated. Stop
+          acting in that app, and hand off if a verification screen is showing. Do not work around it.
     """.trimIndent()
 }

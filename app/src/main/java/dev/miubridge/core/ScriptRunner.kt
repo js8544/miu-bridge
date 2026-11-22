@@ -107,55 +107,36 @@ class ScriptRunner(private val context: Context, private val tools: CommandHandl
         private val NOT_IN_SCRIPTS = setOf(TOOL)
 
         val SPEC = CommandSpec(
-            "Run a JavaScript script on the phone that calls the other phone tools, so many steps take one round trip. " +
-                "In the script: call(name, args) runs a tool and returns its result object (it throws if the tool fails); " +
-                "the JavaScript SDK's `phone` object (phone.tap('text=Send'), phone.launch(pkg), …) works too, without await; " +
-                "findRef(snapshot, /pattern/) returns the ref of the first matching snapshot line; " +
-                "print(value) adds a line to the output; sleep(ms) waits. Only what you print, plus the script's return value, " +
-                "comes back, so read snapshots inside the script and print just what you need. Example: " +
-                "call('phone_launch',{package:'com.android.settings'}); const s = call('phone_snapshot',{}); print(s.snapshot.split('\\n').length). " +
-                "call('phone_screenshot',{}) takes a picture that comes back with the script's result (at most 4 per script, numbered in " +
-                "the order taken). Tool calls are real and are not undone if the script fails. Limit 120 seconds.",
+            "Run JavaScript on the phone that calls the other phone tools, so many steps take one round trip. In the script: " +
+                "call(name, args) runs a tool and returns its result object, and throws if the tool fails; findRef(snapshot, /pattern/) " +
+                "returns the ref of the first matching snapshot line; print(value) adds a line to the output; sleep(ms) waits. " +
+                "Only what you print, and the script's return value, comes back. " +
+                "Example: call('phone_launch',{package:'com.android.settings'}); const r = call('phone_tap',{ref:'text=Network'}); print(r.snapshot). " +
+                "call('phone_screenshot',{}) adds a picture to the result (at most 4). Tool calls are real and are not undone if the " +
+                "script fails. Limit 120 seconds.",
             required = mapOf("code" to Param("string", "The JavaScript to run. Plain statements; `return x` ends the script with a value.")),
             timeoutMs = 130_000,
         )
 
         /** How and when to use scripts; part of every agent's instructions, on the phone or connected over MCP. */
         val GUIDE = """
-            ## Scripts (code mode)
+            ## Many steps in one call
 
-            `phone_script` runs JavaScript on the phone that calls the other phone tools. Think in scripts rather
-            than single calls: one script does every step you can already plan and returns only what it prints, which
-            is faster and keeps long snapshots out of your context.
+            `phone_script` runs JavaScript on the phone that calls the other tools. One script does every step you can
+            already plan and returns only what it prints, which is faster and keeps long snapshots out of your context.
 
-            How much to put in one script:
-            - As many steps as what you know now lets you plan. On an unfamiliar screen that may be one action;
-              on a known flow it is the whole flow.
-            - Stop and look in between only when what you see would change what you do next.
-            - End by printing what the next round needs: the facts you were after, or the lines of the final snapshot
-              you will act on. Then the next script can start from that without another read.
-            The single tools remain for when one action is all you need.
-
-            In a script:
-            - `call(name, args)` runs a tool and returns its result object; it throws if the tool fails.
-              The JavaScript SDK's `phone` object works here too, with the same methods and arguments
-              (`phone.tap('text=Send')`, `phone.type('hello', 'role=input')`, `phone.swipe('up')`), but without
-              `await`: each call returns its result directly.
-            - Name elements with selectors, which need no snapshot: `call('phone_tap', {ref: 'text=Send'})`,
-              `{ref: 'id=tab_home'}`, `{ref: 'role=button[name="OK"]'}`. They wait up to 3 s for the element and fail if
-              it is missing or ambiguous. `call('phone_wait', {target: 'text=Results'})` waits for a page to load.
-            - Every action returns a fresh `snapshot` string to read from. `findRef(snapshot, /pattern/)` returns the ref
-              of the first line matching a regular expression, or null, for when a selector cannot say it.
-            - `print(value)` adds a line to the output; `sleep(ms)` waits; `return value` ends the script.
-            - Print only what you need. `call('phone_screenshot', {})` takes a picture that comes back with the
-              script's result (up to 4, in the order taken), for screens the element tree cannot describe or to see
-              where a script went wrong.
-            - Tool calls are real. If the script fails midway, the earlier steps are not undone: the error says how many
-              calls had succeeded and comes back with what was printed so far, so print progress as you go.
-            - `phone_launch` returns once the app's first screen is there. Content that loads later (a list, a search
-              result) still needs `call('phone_wait', {target: ...})` before you read or tap it.
-
-            Example: open an app, enter a section, and collect the titles on three screens of a list.
+            - Put in as many steps as you can plan now: one action on an unfamiliar screen, the whole flow on a known
+              one. Stop to look only when what you see would change what you do next.
+            - `call(name, args)` runs a tool and returns its result; it throws if the tool fails. The JavaScript SDK's
+              `phone` object works too, without `await`: `phone.tap('text=Send')`, `phone.type('hello', 'role=input')`.
+            - Name elements with selectors, which need no snapshot. Every action returns a `snapshot` string;
+              `findRef(snapshot, /pattern/)` gives the ref of its first matching line, or null.
+            - `phone_launch` returns when the app's first screen is there. Content that loads later needs
+              `call('phone_wait', {target: ...})` before you read or tap it.
+            - `print(value)` adds to the output, `sleep(ms)` waits, `return value` ends the script. End by printing what
+              you need next: the facts you were after, or the lines you will act on.
+            - Steps already done are not undone when a script fails; the error says how many succeeded and carries what
+              was printed, so print progress as you go.
 
             ```js
             call('phone_launch', {package: 'com.android.settings'});
