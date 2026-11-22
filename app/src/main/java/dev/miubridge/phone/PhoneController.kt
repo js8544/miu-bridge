@@ -188,7 +188,17 @@ class PhoneController(private val context: Context) : CommandHandler {
             throw BadRequest("the background display is not ready: ${state.value.message}", "display_not_ready")
         }
         // The background display sleeps when the phone does; wake it (and only it) before working on it.
-        if (!passive && name in PhoneSpecs.all) helper?.let { h -> runCatching { h.call("wake") } }
+        if (!passive && name in PhoneSpecs.all) helper?.let { h ->
+            runCatching { h.call("wake", JSONObject().put("locked", deviceLocked())).json.optInt("display", -1) }.getOrNull()?.let { id ->
+                val s = screen
+                // The helper makes the display anew when the phone locks or unlocks; the open apps move with it.
+                if (s != null && id > 0 && id != s.id) {
+                    screen = Screen(id, s.width, s.height, s.dpi)
+                    ScreenReaderService.targetDisplay = id
+                    left = true
+                }
+            }
+        }
         if (!passive && left) {
             left = false
             // The app comes back to the front a moment after the display wakes; reading before that sees nothing.
@@ -470,6 +480,8 @@ class PhoneController(private val context: Context) : CommandHandler {
         }
     }
 
+    private fun deviceLocked(): Boolean = context.getSystemService(android.app.KeyguardManager::class.java).isDeviceLocked
+
     private suspend fun type(text: String, ref: String?): CommandResult {
         val s = requireScreen()
         val svc = ScreenReaderService.current.value
@@ -480,10 +492,20 @@ class PhoneController(private val context: Context) : CommandHandler {
             svc?.focusedInput(s.id)
         }
         if (node == null) {
-            // Some apps (WeChat) hide their fields from accessibility: paste into whatever has focus.
-            return act("pasted ${text.length} characters into the focused field; check with phone_screenshot") {
-                it.call("paste", JSONObject().put("text", text))
+            // Some apps (WeChat) hide their fields from accessibility. Unlocked, paste into whatever has focus.
+            // Locked, Android gives no app the clipboard, but the display then takes the keyboard (see
+            // VirtualScreen.flagCandidates), so the text is written as a keyboard would write it.
+            if (!deviceLocked()) {
+                return act("pasted ${text.length} characters into the focused field; check with phone_screenshot") {
+                    it.call("paste", JSONObject().put("text", text))
+                }
             }
+            val pkg = svc?.topPackage(s.id) ?: lastSnapshot?.packageName
+            if (pkg != null && svc != null && withContext(Dispatchers.IO) { svc.typeAsKeyboard(pkg, text) }) {
+                settle()
+                return CommandResult.Ok(snapshot("typed ${text.length} characters into the focused field; check with phone_screenshot"))
+            }
+            throw BadRequest("no input field has focus; tap the field first, then send the text again", "not_actionable")
         }
         val ok = withContext(Dispatchers.IO) { ScreenReaderService.setText(node, text) }
         if (!ok) throw BadRequest("could not set text (the element is not an editable field, or the app refused)")
@@ -770,7 +792,7 @@ class PhoneController(private val context: Context) : CommandHandler {
         // A new helper means a new display: whatever was open on the old one is gone, and agents should be told why.
         if (reused == null && hadDisplay) restarted = true
         val (width, height, dpi) = displayShape()
-        val made = client.call("display", JSONObject().put("width", width).put("height", height).put("dpi", dpi)).json
+        val made = client.call("display", JSONObject().put("width", width).put("height", height).put("dpi", dpi).put("locked", deviceLocked())).json
         val id = made.getInt("display")
         helper = client
         // A helper that outlived this process keeps the display it already made; go by what it reports.

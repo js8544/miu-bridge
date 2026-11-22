@@ -43,13 +43,40 @@ internal class VirtualScreen(private val main: Handler) {
     @Volatile var dpi = 0
         private set
 
-    fun ensure(width: Int, height: Int, dpi: Int): Int = main.await {
-        display?.let { return@await displayId }
+    /** True when the display may take input focus and hold the keyboard; see [flagCandidates]. */
+    @Volatile var takesKeyboard = false
+        private set
+
+    fun ensure(width: Int, height: Int, dpi: Int, takesKeyboard: Boolean): Int = main.await {
+        if (display == null) make(width, height, dpi, takesKeyboard)
+        displayId
+    }
+
+    /**
+     * Makes the display again with the other answer to [takesKeyboard], which Android fixes when a
+     * display is created. [move] is given the new display's id while the old one still exists, to
+     * carry over what is open on it.
+     */
+    fun remake(takesKeyboard: Boolean, move: (Int) -> Unit): Int = main.await {
+        val oldDisplay = display ?: throw HelperFailure("background display not created")
+        val oldReader = reader
+        make(width, height, dpi, takesKeyboard)
+        runCatching { move(displayId) }.onFailure { Log.w(HelperMain.TAG, "could not carry apps over to the new display", it) }
+        oldDisplay.release()
+        frames.await { if (latestFrom === oldReader) latest = null }
+        oldReader?.close()
+        off = false
+        displayId
+    }
+
+    private var latestFrom: ImageReader? = null // touched only on the frames thread
+
+    private fun make(width: Int, height: Int, dpi: Int, takesKeyboard: Boolean) {
         val r = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
         r.setOnImageAvailableListener(::onFrame, frames)
         var created: VirtualDisplay? = null
         var refusal: Throwable? = null
-        for ((flags, isTrusted) in flagCandidates()) {
+        for ((flags, isTrusted) in flagCandidates(takesKeyboard)) {
             try {
                 created = createDisplay(VirtualDisplayConfig.Builder("miubridge", width, height, dpi).setSurface(r.surface).setFlags(flags).build())
                 if (created != null) {
@@ -75,9 +102,9 @@ internal class VirtualScreen(private val main: Handler) {
         this.width = width
         this.height = height
         this.dpi = dpi
-        if (trusted) hideImeOn(displayId)
-        Log.i(HelperMain.TAG, "virtual display $displayId ${width}x$height@$dpi trusted=$trusted")
-        displayId
+        this.takesKeyboard = takesKeyboard
+        if (trusted) setImePolicy(displayId, if (takesKeyboard) DISPLAY_IME_POLICY_LOCAL else DISPLAY_IME_POLICY_HIDE)
+        Log.i(HelperMain.TAG, "virtual display $displayId ${width}x$height@$dpi trusted=$trusted keyboard=$takesKeyboard")
     }
 
     fun screenshot(maxWidth: Int, quality: Int): Shot = frames.await {
@@ -116,6 +143,7 @@ internal class VirtualScreen(private val main: Handler) {
         val image = try { r.acquireLatestImage() } catch (e: IllegalStateException) { null } ?: return
         latest?.close()
         latest = image
+        latestFrom = r
     }
 
     private fun encode(image: Image, maxWidth: Int, quality: Int): Shot {
@@ -168,11 +196,19 @@ internal class VirtualScreen(private val main: Handler) {
         }
     }
 
-    /** Candidate flag sets, richest first; trusted-only flags are dropped if the platform refuses them. */
-    private fun flagCandidates(): List<Pair<Int, Boolean>> {
+    /**
+     * Candidate flag sets, richest first; trusted-only flags are dropped if the platform refuses them.
+     *
+     * Android gives the keyboard, and with it the way to write into a field as a keyboard does, only
+     * to the display that has top focus. While the owner uses the phone that must stay their screen,
+     * or their keyboard would close whenever the agent taps: so the display is barred from taking it.
+     * While the phone is locked nobody is typing, and [takesKeyboard] lifts the bar.
+     */
+    private fun flagCandidates(takesKeyboard: Boolean): List<Pair<Int, Boolean>> {
         val sdk = Build.VERSION.SDK_INT
         var base = PUBLIC or OWN_CONTENT_ONLY or SUPPORTS_TOUCH or ROTATES_WITH_CONTENT or DESTROY_CONTENT_ON_REMOVAL
-        if (sdk >= 34) base = base or OWN_FOCUS or STEAL_TOP_FOCUS_DISABLED
+        if (sdk >= 34) base = base or OWN_FOCUS
+        if (sdk >= 34 && !takesKeyboard) base = base or STEAL_TOP_FOCUS_DISABLED
         // Not CAN_SHOW_WITH_INSECURE_KEYGUARD: the platform refuses it on a public display
         // ("Public display must not be marked as SHOW_WHEN_LOCKED_INSECURE"), so no display is created at all.
         var trustedFlags = TRUSTED
@@ -181,13 +217,13 @@ internal class VirtualScreen(private val main: Handler) {
         return listOf(base or trustedFlags to true, base to false)
     }
 
-    /** Keeps the soft keyboard off every screen for this display (phone_type sets text directly). */
-    private fun hideImeOn(id: Int) {
+    /** Where the soft keyboard goes for fields on this display: nowhere, or onto the display itself. */
+    private fun setImePolicy(id: Int, policy: Int) {
         if (Build.VERSION.SDK_INT < 31) return
         try {
             val wm = Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null)!!
             wm.javaClass.getMethod("setDisplayImePolicy", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-                .invoke(wm, id, DISPLAY_IME_POLICY_HIDE)
+                .invoke(wm, id, policy)
         } catch (e: Throwable) {
             Log.w(HelperMain.TAG, "could not set IME policy: ${e.javaClass.simpleName}")
         }
@@ -205,6 +241,7 @@ internal class VirtualScreen(private val main: Handler) {
         const val ALWAYS_UNLOCKED = 1 shl 12
         const val OWN_FOCUS = 1 shl 14
         const val STEAL_TOP_FOCUS_DISABLED = 1 shl 16
+        const val DISPLAY_IME_POLICY_LOCAL = 0
         const val DISPLAY_IME_POLICY_HIDE = 2
     }
 }

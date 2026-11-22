@@ -63,6 +63,12 @@ Each fact is stated once: a tool's description says what that tool does, the gui
 - Android 12 / HarmonyOS behaviour is untested. Without a trusted display (Android < 13 may refuse
   one), the keyboard may appear on the main screen and the background display may stop when the
   screen turns off.
+- Text for an app that hides its fields (WeChat) is pasted while the phone is unlocked. Locked, Android
+  closes the clipboard to every app, so on Android 14+ the display is made anew without
+  `STEAL_TOP_FOCUS_DISABLED` and with the keyboard shown on it, the open apps are moved across, and the
+  accessibility service writes into the focused field as a keyboard would. It goes back the same way
+  when the phone is unlocked, so the owner's keyboard is never taken. Android 13 and earlier still
+  cannot put such text in while locked.
 - `FLAG_SECURE` screens screenshot black. `uiautomator dump` turns the accessibility service off while
   it runs.
 

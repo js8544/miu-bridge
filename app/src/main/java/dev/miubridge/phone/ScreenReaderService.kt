@@ -56,6 +56,27 @@ class ScreenReaderService : AccessibilityService() {
         if (windowId in targetWindowIds) lastEventAt = now
     }
 
+    /**
+     * Replaces the text of the field that is taking input in [pkg], the way a keyboard would: Android 13
+     * lets an accessibility service write into the editor that has input focus. It needs neither a
+     * keyboard on screen nor the clipboard (which Android closes to every app while the phone is locked)
+     * nor the field in the element tree (which some apps keep empty). False when no field of [pkg] is
+     * taking input, or before Android 13.
+     */
+    fun typeAsKeyboard(pkg: String, text: String): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 33) return false
+        val method = inputMethod ?: return false
+        if (!method.currentInputStarted || method.currentInputEditorInfo?.packageName != pkg) return false
+        val editor = method.currentInputConnection ?: return false
+        val around = editor.getSurroundingText(MAX_FIELD_CHARS, MAX_FIELD_CHARS, 0)
+        if (around != null) {
+            val before = around.selectionStart.coerceAtLeast(0)
+            editor.deleteSurroundingText(before, (around.text.length - around.selectionEnd).coerceAtLeast(0))
+        }
+        editor.commitText(text, 1, null)
+        return true
+    }
+
     /** Text snapshot of [display]'s windows, topmost window first. */
     fun snapshot(display: Int, width: Int, height: Int): UiSnapshot {
         val windows = windowsOn(display).sortedByDescending { it.layer }
@@ -105,11 +126,14 @@ class ScreenReaderService : AccessibilityService() {
     fun focusedInput(display: Int): AccessibilityNodeInfo? =
         windowsOn(display).firstNotNullOfOrNull { w -> w.root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable } }
 
+    /** The windows on [display], without the keyboard: it is not part of any app, and text goes in through phone_type. */
     private fun windowsOn(display: Int): List<AccessibilityWindowInfo> =
-        if (display <= 0) emptyList() else windowsOnAllDisplays.get(display).orEmpty()
+        if (display <= 0) emptyList()
+        else windowsOnAllDisplays.get(display).orEmpty().filter { it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD }
 
     companion object {
         private const val MAX_NODES = 1500
+        private const val MAX_FIELD_CHARS = 100_000
         private const val MAX_DEPTH = 60
 
         internal val connected = MutableStateFlow<ScreenReaderService?>(null)

@@ -36,10 +36,13 @@ internal class HelperHost(main: Handler, private val apk: String) {
     private fun dispatch(op: String, r: JSONObject): Pair<JSONObject, ByteArray?> = when (op) {
         "hello" -> ok().put("apk", apk).put("pid", android.os.Process.myPid()).put("display", screen.displayId) to null
         "display" -> {
-            val id = screen.ensure(r.getInt("width"), r.getInt("height"), r.getInt("dpi"))
+            val id = screen.ensure(r.getInt("width"), r.getInt("height"), r.getInt("dpi"), r.optBoolean("locked"))
             ok().put("display", id).put("trusted", screen.trusted).put("width", screen.width).put("height", screen.height).put("dpi", screen.dpi) to null
         }
-        "wake" -> ok().put("woke", wake(display())) to null
+        "wake" -> {
+            keyboardFollowsLock(r.optBoolean("locked"))
+            ok().put("woke", wake(display())).put("display", display()) to null
+        }
         "sleep" -> ok().put("slept", screen.turn(on = false)) to null
         "screenshot" -> {
             val shot = screen.screenshot(r.optInt("maxWidth", 720), r.optInt("quality", 70))
@@ -142,6 +145,19 @@ internal class HelperHost(main: Handler, private val apk: String) {
         acquire.invoke(power, *args.copyOf(acquire.parameterTypes.size))
         power.javaClass.getMethod("releaseWakeLock", android.os.IBinder::class.java, Int::class.java).invoke(power, token, 0)
         return true
+    }
+
+    /**
+     * The display takes the keyboard exactly while the phone is locked (see VirtualScreen.flagCandidates).
+     * Android fixes that when a display is made, so a change of lock state means a new display, with the
+     * open apps moved across as they are. Before Android 14 displays are not barred from focus at all.
+     */
+    private fun keyboardFollowsLock(locked: Boolean) {
+        if (android.os.Build.VERSION.SDK_INT < 34 || screen.takesKeyboard == locked) return
+        val old = display()
+        val open = tasks.list().filter { it.displayId == old }
+        screen.remake(locked) { fresh -> open.asReversed().forEach { tasks.moveToDisplay(it.id, fresh) } }
+        Log.i(HelperMain.TAG, "phone ${if (locked) "locked" else "unlocked"}: moved ${open.size} apps from display $old to ${screen.displayId}")
     }
 
     private fun display(): Int = screen.displayId.takeIf { it > 0 } ?: throw HelperFailure("background display not created")

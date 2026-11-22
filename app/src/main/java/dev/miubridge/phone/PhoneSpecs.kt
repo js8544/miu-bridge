@@ -63,7 +63,7 @@ internal object PhoneSpecs {
         ),
         "phone_type" to CommandSpec(
             "Replace the text of an input field, in any language. Without `ref` it uses the field that has focus. Some apps " +
-                "(WeChat, for one) hide their fields from the element tree; the text is then pasted into whatever has focus, so tap " +
+                "(WeChat, for one) hide their fields from the element tree; the text then goes into whatever has focus, so tap " +
                 "the field first and check the result with a screenshot. It does not submit: use phone_key enter or the app's button. $RETURNS",
             required = mapOf("text" to Param("string", "The full new text of the field.")),
             optional = mapOf("ref" to Param("string", "The input, as a ref or a selector (e.g. role=input, id=search_box)."), "screenshot" to shot),
