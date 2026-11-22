@@ -93,6 +93,30 @@ needs (the facts you were after, or the part of the final screen you will act on
   matches several the error lists them. It is waited for up to 3 seconds.
 - A point, when the app exposes no element tree: read a screenshot and multiply image pixels by `.scale`.
 
+## End-to-end encryption
+
+```python
+phone = Phone(e2e=True)          # or set MIU_BRIDGE_E2E=1
+```
+
+```js
+const phone = new Phone({ e2e: true });
+```
+
+With this on, requests and answers are encrypted between this SDK and the phone, so the relay (or the
+local network, which is plain HTTP) carries only ciphertext and never sees the token. The key is derived
+from the token, so there is no handshake and no extra round trip, and answers are compressed first, so
+they are no larger than before. The phone needs Miu Bridge 0.2.5 or later. In Python it needs the
+`cryptography` package (`pip install cryptography`); JavaScript needs nothing.
+
+- It protects calls made through this SDK. A plain MCP client that connects to the address directly
+  still sends the token and its requests where the relay can read them.
+- The token is the key: anyone who has it can read the traffic, and a new token (the owner makes one in
+  the app) cuts off the old one. There is no forward secrecy.
+- The phone accepts each encrypted request once and only within five minutes of when it was sent, so a
+  request cannot be replayed. If the clocks at the two ends are more than five minutes apart, calls fail
+  with `bad_request` and a message that says so.
+
 ## Good to know
 
 - If you call the address yourself instead of through this SDK, send a `User-Agent` header that names

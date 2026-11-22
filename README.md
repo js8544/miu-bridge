@@ -26,6 +26,9 @@ await phone.tap("text=Wi-Fi");
   through a relay. The relay forwards and does not store what passes through; you can
   [run your own](relay/) and point the app at it. The hosted relay is free for 1,000 remote tool
   calls per phone per month; same Wi-Fi is never counted, and your own relay sets its own allowance.
+- **The relay can read what it forwards, unless the agent encrypts it.** Agents that use the [SDK](sdk/) can turn on
+  end-to-end encryption; the relay then carries only ciphertext and never sees the token. A plain MCP connection is
+  protected by HTTPS as far as the relay.
 - **The token is the key to your phone.** Give it only to agents you trust.
 - Payments, sign-ins and verifications are handed back to you. You choose which apps agents may open: every app except a block list (the default, empty), or only the apps on an allow list.
 - Automating an app may break that app's terms. That is your call and your responsibility.

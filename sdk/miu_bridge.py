@@ -13,6 +13,8 @@ Elements are named by a ref from the latest screen ("e12") or by a selector that
 text=Send, text="Send" (exact), id=send_btn, role=button[name="Send"], optionally followed by " >> nth=N".
 """
 import base64
+import hashlib
+import hmac
 import http.client
 import json
 import os
@@ -21,6 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+import zlib
 
 __all__ = ["Phone", "PhoneError", "Screen", "Screenshot"]
 
@@ -90,14 +93,48 @@ class Screenshot:
         return path
 
 
+def _cipher(token):
+    """AES-256-GCM under a key derived from the token: what end-to-end encryption (e2e=True) seals bodies with."""
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        raise PhoneError("end-to-end encryption needs the 'cryptography' package: pip install cryptography", "bad_request") from None
+    return AESGCM(hmac.new(token.encode(), b"miu-bridge e2e v1", hashlib.sha256).digest())
+
+
+def _seal(token, body):
+    """The request body as the phone expects it sealed, and the nonce its answer is bound to."""
+    nonce = os.urandom(12)
+    if len(body) < 1024:
+        packed = b"\0" + body
+    else:
+        squeeze = zlib.compressobj(1, zlib.DEFLATED, -15)
+        packed = b"\1" + squeeze.compress(body) + squeeze.flush()
+    sealed = _cipher(token).encrypt(nonce, int(time.time() * 1000).to_bytes(8, "big") + packed, None)
+    return b"e1." + base64.urlsafe_b64encode(nonce + sealed).rstrip(b"="), nonce
+
+
+def _open(token, raw, nonce):
+    """The phone's answer to the request sent with this nonce."""
+    packed = base64.urlsafe_b64decode(raw[3:] + b"=" * (-len(raw[3:]) % 4))
+    try:
+        plain = _cipher(token).decrypt(packed[:12], packed[12:], nonce)
+    except Exception:
+        raise PhoneError("the answer could not be decrypted: it was not sealed by this phone for this request", "unreachable") from None
+    return zlib.decompress(plain[1:], -15) if plain[:1] == b"\1" else plain[1:]
+
+
 class Phone:
-    def __init__(self, url=None, token=None, timeout=150, retries=2):
+    def __init__(self, url=None, token=None, timeout=150, retries=2, e2e=None):
         self.url = url or os.environ.get("MIU_BRIDGE_URL")
         self.token = token or os.environ.get("MIU_BRIDGE_TOKEN")
         if not self.url or not self.token:
             raise PhoneError("set MIU_BRIDGE_URL and MIU_BRIDGE_TOKEN, or pass url and token")
         self.timeout = timeout
         self.retries = retries
+        # End-to-end encryption: the relay (or the local network) carries only ciphertext and never sees the token.
+        # Needs Miu Bridge 0.2.5 or later on the phone. Also set by MIU_BRIDGE_E2E=1.
+        self.e2e = os.environ.get("MIU_BRIDGE_E2E") == "1" if e2e is None else e2e
         self._id = 0
         self._connection = None
         self.last_timing = {}
@@ -188,9 +225,16 @@ class Phone:
                 if self._connection is None:
                     self._proxy_headers = {}
                     self._connection = self._connect()
-                self._connection.request("POST", self._path, body=body, headers={**headers, **self._proxy_headers})
+                wire, nonce = (body, None)
+                if self.e2e:  # sealed anew for every attempt: a sealed request is accepted once
+                    wire, nonce = _seal(self.token, body if isinstance(body, bytes) else body.encode())
+                    headers = {**headers, "Content-Type": "text/plain"}
+                    headers.pop("Authorization", None)
+                self._connection.request("POST", self._path, body=wire, headers={**headers, **self._proxy_headers})
                 response = self._connection.getresponse()
                 status, raw = response.status, response.read()
+                if nonce and status == 200 and raw.startswith(b"e1."):
+                    raw = _open(self.token, raw, nonce)
                 self._note_timing(response.getheader("Server-Timing"), time.time() - started, not reused)
                 break
             except (http.client.HTTPException, OSError) as e:
@@ -203,7 +247,7 @@ class Phone:
         if status != 200:
             detail = raw.decode("utf-8", "replace")[:300]
             hint = {401: "the token was rejected", 503: "the phone is offline", 504: "the phone did not answer in time"}.get(status, "")
-            code = {401: "unauthorized", 502: "unreachable", 503: "phone_offline", 504: "relay_timeout"}.get(status, "http_error")
+            code = {400: "bad_request", 401: "unauthorized", 402: "quota_exceeded", 502: "unreachable", 503: "phone_offline", 504: "relay_timeout"}.get(status, "http_error")
             if status == 403 and "1010" in detail:
                 hint = "the relay's CDN refused this client's signature; send a User-Agent header that names your client"
             raise PhoneError(f"HTTP {status} {hint}: {detail}".strip(), code)

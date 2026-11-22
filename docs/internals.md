@@ -90,6 +90,11 @@ phone keeps the same address and the month's count. The app uses the hosted rela
 More → Relay server (`server/Account.kt`); `relayUrl` in `gradle.properties` changes the built-in
 default. See [relay/README.md](../relay/README.md) to run one.
 
+A request whose body starts with `e1.` is end-to-end encrypted (`server/Sealed.kt`, and `e2e` in both SDKs):
+AES-256-GCM under a key derived from the access token, deflated first, with the sending time and a nonce
+the phone accepts once. Being able to open it stands in for the bearer token, which is not sent. The relay
+forwards such a body as it is and counts every one as a tool call, since it cannot tell what is inside.
+
 ## UI and strings
 
 The UI is Jetpack Compose Material 3 (`ui/Theme.kt` holds the palette). All user-facing text lives in

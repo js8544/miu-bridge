@@ -92,23 +92,46 @@ class McpServer(
     }
 
     private suspend fun respond(req: HttpRequest, out: OutputStream) {
-        if (req.path.substringBefore('?') != "/mcp") return write(out, 404, json("error" to "not found"))
+        if (req.path.substringBefore('?') != "/mcp") return write(out, 404, json("error" to "not found").toString())
         val reply = handle(req.method, req.headers["authorization"], req.body)
-        write(out, reply.status, reply.body, reply.ms)
+        write(out, reply.status, reply.text, reply.ms)
     }
 
     /** [ms] is how long this phone took over the request, for whoever is tracing where the time goes. */
-    class Reply(val status: Int, val body: JSONObject?, val ms: Long = 0)
+    class Reply(val status: Int, val body: JSONObject?, val ms: Long = 0, private val sealed: String? = null) {
+        /** What goes on the wire: the body, or its end-to-end encrypted form when the request came that way. */
+        val text: String? get() = sealed ?: body?.toString()
+        fun sealedAs(text: String?) = Reply(status, null, ms, text)
+        fun timed(ms: Long) = Reply(status, body, ms, sealed)
+    }
 
     /** One MCP request, from the local HTTP server or from the relay. Checks the bearer token itself. */
     suspend fun handle(method: String, authorization: String?, rawBody: ByteArray): Reply {
         val start = SystemClock.elapsedRealtime()
-        val reply = dev.miubridge.core.Awake.during { answer(method, authorization, rawBody) }
-        return Reply(reply.status, reply.body, SystemClock.elapsedRealtime() - start)
+        val reply = dev.miubridge.core.Awake.during {
+            if (Sealed.isSealed(rawBody)) sealed(method, rawBody)
+            else if (!token.matches(authorization)) Reply(401, json("error" to "unauthorized"))
+            else answer(method, rawBody)
+        }
+        return reply.timed(SystemClock.elapsedRealtime() - start)
     }
 
-    private suspend fun answer(method: String, authorization: String?, rawBody: ByteArray): Reply {
-        if (!token.matches(authorization)) return Reply(401, json("error" to "unauthorized"))
+    /**
+     * An end-to-end encrypted request: being able to open it is the proof of holding the token, so
+     * no token travels with it. The answer goes back encrypted the same way.
+     */
+    private suspend fun sealed(method: String, rawBody: ByteArray): Reply {
+        val key = token.value
+        val request = try {
+            Sealed.open(key, rawBody) ?: return Reply(401, json("error" to "unauthorized"))
+        } catch (e: Sealed.Stale) {
+            return Reply(400, json("error" to "this request was sent too long ago or was already received; check that the clock is right on both ends", "code" to "stale_request"))
+        }
+        val reply = answer(method, request.body)
+        return reply.sealedAs(reply.body?.let { Sealed.seal(key, it.toString().toByteArray(Charsets.UTF_8), request.nonce) })
+    }
+
+    private suspend fun answer(method: String, rawBody: ByteArray): Reply {
         when (method) {
             "POST" -> {}
             "DELETE" -> return Reply(200, null)
@@ -195,8 +218,8 @@ class McpServer(
         .put("id", id ?: JSONObject.NULL).put("error", JSONObject().put("code", code).put("message", message))
     private fun json(vararg pairs: Pair<String, Any>) = JSONObject().apply { pairs.forEach { put(it.first, it.second) } }
 
-    private fun write(out: OutputStream, status: Int, body: JSONObject?, ms: Long = 0) {
-        val bytes = body?.toString()?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
+    private fun write(out: OutputStream, status: Int, body: String?, ms: Long = 0) {
+        val bytes = body?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
         val head = buildString {
             append("HTTP/1.1 $status ${REASONS[status] ?: "OK"}\r\n")
             if (body != null) append("Content-Type: application/json\r\n")

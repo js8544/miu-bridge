@@ -53,14 +53,50 @@ export class Screenshot {
   async save(path) { const { writeFile } = await import("node:fs/promises"); await writeFile(path, this.jpeg); return path; }
 }
 
+// End-to-end encryption ({ e2e: true }): bodies sealed with AES-256-GCM under a key derived from the token.
+const bytes = (text) => new TextEncoder().encode(text);
+const fromB64 = (text) => Uint8Array.from(atob(text.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+const toB64 = (buf) => { let s = ""; for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+async function sealKey(token) {
+  const { subtle } = globalThis.crypto;
+  const mac = await subtle.importKey("raw", bytes(token), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return subtle.importKey("raw", await subtle.sign("HMAC", mac, bytes("miu-bridge e2e v1")), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+/** The request body as the phone expects it sealed, and the nonce its answer is bound to. */
+async function seal(key, body) {
+  const data = bytes(body);
+  const packed = data.length < 1024 ? [0, ...data] : [1, ...(await import("node:zlib")).deflateRawSync(data, { level: 1 })];
+  const plain = new Uint8Array(8 + packed.length);
+  new DataView(plain.buffer).setBigUint64(0, BigInt(Date.now()));
+  plain.set(packed, 8);
+  const nonce = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const sealed = new Uint8Array(await globalThis.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, plain));
+  const out = new Uint8Array(12 + sealed.length);
+  out.set(nonce); out.set(sealed, 12);
+  return { wire: "e1." + toB64(out), nonce };
+}
+/** The phone's answer to the request sent with this nonce. */
+async function open(key, text, nonce) {
+  const packed = fromB64(text.slice(3));
+  let plain;
+  try {
+    plain = new Uint8Array(await globalThis.crypto.subtle.decrypt({ name: "AES-GCM", iv: packed.subarray(0, 12), additionalData: nonce }, key, packed.subarray(12)));
+  } catch { throw new PhoneError("the answer could not be decrypted: it was not sealed by this phone for this request", "unreachable"); }
+  const body = plain[0] === 1 ? (await import("node:zlib")).inflateRawSync(plain.subarray(1)) : plain.subarray(1);
+  return new TextDecoder().decode(body);
+}
+
 export class Phone {
-  constructor({ url, token, timeoutMs = 150_000, retries = 2 } = {}) {
+  constructor({ url, token, timeoutMs = 150_000, retries = 2, e2e } = {}) {
     const env = globalThis.process?.env ?? {};
     this.url = url ?? env.MIU_BRIDGE_URL;
     this.token = token ?? env.MIU_BRIDGE_TOKEN;
     if (!this.url || !this.token) throw new PhoneError("set MIU_BRIDGE_URL and MIU_BRIDGE_TOKEN, or pass url and token");
     this.timeoutMs = timeoutMs;
     this.retries = retries;
+    // End-to-end encryption: the relay (or the local network) carries only ciphertext and never sees the token.
+    // Needs Miu Bridge 0.2.5 or later on the phone. Also set by MIU_BRIDGE_E2E=1.
+    this.e2e = e2e ?? env.MIU_BRIDGE_E2E === "1";
     this.id = 0;
   }
 
@@ -84,12 +120,17 @@ export class Phone {
   async #send(body) {
     let response;
     const started = Date.now();
+    // Sealed anew for every attempt: a sealed request is accepted once.
+    const sealed = this.e2e ? await seal(this.sealing ??= await sealKey(this.token), body) : null;
     try {
       response = await fetch(this.url, {
         method: "POST",
         // The User-Agent is named on purpose: the relay's CDN refuses some default client signatures with a 403.
-        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: `Bearer ${this.token}`, "User-Agent": "miu-bridge-sdk/1.2 (js)" },
-        body,
+        headers: {
+          Accept: "application/json", "User-Agent": "miu-bridge-sdk/1.2 (js)",
+          ...(sealed ? { "Content-Type": "text/plain" } : { "Content-Type": "application/json", Authorization: `Bearer ${this.token}` }),
+        },
+        body: sealed?.wire ?? body,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (e) {
@@ -99,12 +140,15 @@ export class Phone {
       const detail = (await response.text()).slice(0, 300);
       let hint = { 401: "the token was rejected", 503: "the phone is offline", 504: "the phone did not answer in time" }[response.status] ?? "";
       if (response.status === 403 && detail.includes("1010")) hint = "the relay's CDN refused this client's signature; send a User-Agent header that names your client";
-      const code = { 401: "unauthorized", 502: "unreachable", 503: "phone_offline", 504: "relay_timeout" }[response.status] ?? "http_error";
+      const code = { 400: "bad_request", 401: "unauthorized", 402: "quota_exceeded", 502: "unreachable", 503: "phone_offline", 504: "relay_timeout" }[response.status] ?? "http_error";
       throw new PhoneError(`HTTP ${response.status} ${hint}: ${detail}`.trim(), code);
     }
     let reply;
     const header = response.headers.get("Server-Timing");
-    try { reply = await response.json(); } catch (e) { throw new PhoneError(`no answer from the phone: ${e.message}`, "unreachable"); }
+    try {
+      const text = await response.text();
+      reply = JSON.parse(sealed && text.startsWith("e1.") ? await open(this.sealing, text, sealed.nonce) : text);
+    } catch (e) { if (e instanceof PhoneError) throw e; throw new PhoneError(`no answer from the phone: ${e.message}`, "unreachable"); }
     if (reply.error) throw new PhoneError(String(reply.error.message ?? JSON.stringify(reply.error)), "bad_request");
     // Where this call's time went, in milliseconds: total as seen from here, each part the relay and the phone
     // reported (edge, relay, link, phone), network for what is left over, and where Cloudflare handled it.

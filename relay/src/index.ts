@@ -392,7 +392,9 @@ async function device(request: Request, env: Env, id: string, kind: "connect" | 
 }
 
 /** The JSON-RPC id of a tools/call request, or null for anything else. */
-function toolCall(body: string): { id: unknown } | null {
+function toolCall(body: string): { id: unknown; sealed?: boolean } | null {
+  // End-to-end encrypted: nothing in it can be read here, so every such request counts as a call.
+  if (body.startsWith("e1.")) return { id: null, sealed: true };
   if (!body.includes("tools/call")) return null;
   try {
     const v = JSON.parse(body);
@@ -531,7 +533,10 @@ export class Phone implements DurableObject {
     const owner = rpc ? await this.state.storage.get<string>("owner") : undefined;
     if (rpc && owner) {
       const usage = await this.usage(owner);
-      if (usage.limit !== null && usage.used >= usage.limit) return quotaExceeded(rpc.id, usage);
+      if (usage.limit !== null && usage.used >= usage.limit) {
+        // An encrypted request cannot be answered in kind from here: the status says it instead.
+        return rpc.sealed ? json(402, { error: "this phone has used its remote tool calls for this month", code: "quota_exceeded" }) : quotaExceeded(rpc.id, usage);
+      }
     }
     const ready = Date.now();
     const sent = await this.send(socket, request, body);

@@ -119,7 +119,7 @@ class RelayClient(private val context: Context, private val server: McpServer?) 
                 val req = runCatching { JSONObject(text) }.getOrNull() ?: return@launch
                 val reply = (server ?: return@launch).handle(req.optString("method"), req.optString("authorization"), req.optString("body").toByteArray())
                 val out = JSONObject().put("id", req.optString("id")).put("status", reply.status).put("ms", reply.ms)
-                reply.body?.let { out.put("body", it.toString()) }
+                reply.text?.let { out.put("body", it) }
                 webSocket.send(out.toString())
             }
         }
