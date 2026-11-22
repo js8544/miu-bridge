@@ -4,6 +4,9 @@ import android.content.Context
 import dev.miubridge.R
 import android.os.Build
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -26,9 +29,14 @@ class Account(private val context: Context) {
         .writeTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
-    /** The relay this phone uses: the hosted one unless the owner pointed the app at their own. */
-    val baseUrl: String get() = prefs.getString("relay_url", null) ?: DEFAULT_RELAY_URL
-    val usesDefaultRelay: Boolean get() = baseUrl == DEFAULT_RELAY_URL
+    /**
+     * The relay this phone uses: the owner's own if they entered one, otherwise the hosted relay that
+     * answered soonest when remote access was first turned on (see [link]).
+     */
+    val baseUrl: String get() = prefs.getString("relay_url", null)
+        ?: prefs.getString("relay_near", null)?.takeIf { it in HOSTED }
+        ?: DEFAULT_RELAY_URL
+    val usesDefaultRelay: Boolean get() = prefs.getString("relay_url", null) == null
 
     /**
      * Points the app at another relay ([url] blank for the hosted one). A device belongs to one
@@ -36,11 +44,13 @@ class Account(private val context: Context) {
      * is not an http(s) address.
      */
     suspend fun useRelay(url: String): Boolean {
-        val next = relayAddress(url, DEFAULT_RELAY_URL) ?: return false
+        val next = relayAddress(url, "") ?: return false
+        if (next.isEmpty() && usesDefaultRelay) return true
         if (next == baseUrl) return true
         unlink()
-        prefs.edit().remove("device_id").apply {
-            if (next == DEFAULT_RELAY_URL) remove("relay_url") else putString("relay_url", next)
+        // Back to the hosted relays, the nearest is found again the next time remote access is turned on.
+        prefs.edit().remove("device_id").remove("relay_near").apply {
+            if (next.isEmpty()) remove("relay_url") else putString("relay_url", next)
         }.apply()
         return true
     }
@@ -57,6 +67,9 @@ class Account(private val context: Context) {
      */
     suspend fun link(): String? = withContext(Dispatchers.IO) {
         runCatching {
+            // A phone that has not been on a hosted relay yet goes to the one that answers soonest from
+            // where it is. It is not moved afterwards: its address would change under its agents.
+            if (usesDefaultRelay && deviceId == null && HOSTED.size > 1) prefs.edit().putString("relay_near", nearest()).apply()
             val body = JSONObject().put("name", "${Build.MANUFACTURER} ${Build.MODEL}").put("hardware", hardware())
             val device = try { post("/api/phones", body) } catch (e: java.io.IOException) { post("/api/phones", body) }
             prefs.edit()
@@ -65,6 +78,22 @@ class Account(private val context: Context) {
                 .apply()
             null
         }.getOrElse { message(it) }
+    }
+
+    /** The hosted relay with the shortest round trip from here; the first one if none answers. */
+    private suspend fun nearest(): String = coroutineScope {
+        val quick = http.newBuilder().callTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+        HOSTED.map { url ->
+            async {
+                // The second request rides the connection the first one opened, so it times one round trip.
+                url to runCatching {
+                    repeat(2) { quick.newCall(Request.Builder().url("$url/").build()).execute().close() }
+                    val start = System.nanoTime()
+                    quick.newCall(Request.Builder().url("$url/").build()).execute().close()
+                    System.nanoTime() - start
+                }.getOrDefault(Long.MAX_VALUE)
+            }
+        }.awaitAll().minBy { it.second }.takeIf { it.second != Long.MAX_VALUE }?.first ?: DEFAULT_RELAY_URL
     }
 
     private fun hardware(): String {
@@ -126,7 +155,11 @@ class Account(private val context: Context) {
             return wanted.takeIf { ok }
         }
 
-        /** The hosted relay; set `relayUrl` in gradle.properties to build with another default. */
-        const val DEFAULT_RELAY_URL = dev.miubridge.BuildConfig.RELAY_URL
+        /**
+         * The hosted relays; set `relayUrl` in gradle.properties (comma-separated) to build with others.
+         * The first is the one to fall back on.
+         */
+        val HOSTED: List<String> = dev.miubridge.BuildConfig.RELAY_URL.split(',').map { it.trim().trimEnd('/') }.filter { it.isNotEmpty() }
+        val DEFAULT_RELAY_URL: String = HOSTED.first()
     }
 }

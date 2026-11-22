@@ -1214,7 +1214,7 @@ If you call the address with your own HTTP client, send a User-Agent header that
             if (feedbackDialog) FeedbackDialog(app.traces.notes()) { feedbackDialog = false }
             ListItem(
                 headlineContent = { Text(stringResource(R.string.relay_title)) },
-                supportingContent = { Text(if (relayUrl == Account.DEFAULT_RELAY_URL) stringResource(R.string.relay_default) else relayUrl) },
+                supportingContent = { Text(if (account.usesDefaultRelay) stringResource(R.string.relay_default) else relayUrl) },
                 leadingContent = { Icon(AppIcons.Cloud, null) },
                 colors = clearItem(),
                 modifier = Modifier.clickable { relayDialog = true },
