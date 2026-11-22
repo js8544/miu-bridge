@@ -13,10 +13,10 @@ that did not behave as described at `/api/feedback`, both described in [SECURITY
 
 ## Run your own
 
-Needs a Cloudflare account with a domain, Workers Paid (Durable Objects) and Email Sending.
+Needs a Cloudflare account with a domain and Workers Paid (Durable Objects).
 
 ```sh
-cp wrangler.example.toml wrangler.toml      # then set your domain, sender address and database id
+cp wrangler.example.toml wrangler.toml      # then set your domain and database id
 npx wrangler d1 create miu-bridge
 npx wrangler d1 migrations apply miu-bridge --remote
 npx wrangler deploy
