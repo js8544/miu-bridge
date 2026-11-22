@@ -18,8 +18,8 @@ android {
         applicationId = "dev.miubridge"
         minSdk = 30
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.2.7"
+        versionCode = 10
+        versionName = "0.2.8"
         buildConfigField("String", "RELAY_URL", "\"${providers.gradleProperty("relayUrl").getOrElse("https://phone.jinshang.ai,https://hk.jinshang.ai")}\"")
         // The GitHub repository whose releases the app checks for a newer version; empty turns the check off.
         buildConfigField("String", "RELEASES_REPO", "\"${providers.gradleProperty("releasesRepo").getOrElse("js8544/miu-bridge")}\"")
