@@ -3,12 +3,12 @@ package dev.miubridge.phone
 import android.content.Context
 
 /**
- * Which apps agents may open on the background display, as the owner set it. Nothing is closed to
- * agents until the owner chooses so. Two modes, each with its own list, kept apart so switching mode
- * does not lose the other list:
+ * Which apps agents may open on the background display, as the owner set it. Two modes, each with its
+ * own list, kept apart so switching mode does not lose the other list:
  *
- * - [Mode.BLOCK] (the default): agents may open every app except those in [blocked]. An empty list
- *   closes nothing.
+ * - [Mode.BLOCK] (the default): agents may open every app except those in [blocked]. Apps that move
+ *   money, hold identity papers or keep passwords ([RiskyApps]) start on it; only the owner takes them
+ *   off.
  * - [Mode.ALLOW]: agents may open only the apps in [allowed]. An empty list closes every app.
  *
  * The rule is checked when an agent opens an app (phone_launch), opens a link (phone_open_url: in
@@ -18,6 +18,12 @@ class AppPolicy(context: Context) {
     enum class Mode { BLOCK, ALLOW }
 
     private val prefs = context.getSharedPreferences("phone", Context.MODE_PRIVATE)
+
+    init {
+        RiskyApps.addNew(blocked, prefs.getStringSet(RISKY_ADDED, emptySet()).orEmpty())?.let { (list, added) ->
+            prefs.edit().putStringSet(BLOCKED, list).putStringSet(RISKY_ADDED, added).apply()
+        }
+    }
 
     var mode: Mode
         get() = if (prefs.getString(MODE, null) == "allow") Mode.ALLOW else Mode.BLOCK
@@ -40,9 +46,12 @@ class AppPolicy(context: Context) {
     }
 
     /** Why [pkg] was refused, for the agent. */
-    fun refusal(pkg: String?): String = when (mode) {
-        Mode.BLOCK -> "The owner does not let agents open ${pkg ?: "that app"}. Ask the owner if it is needed."
-        Mode.ALLOW -> "The owner lets agents open only the apps they chose, and ${pkg ?: "the app for that link"} is not one of them. " +
+    fun refusal(pkg: String?): String = when {
+        mode == Mode.BLOCK && pkg in RiskyApps.PACKAGES ->
+            "$pkg handles money, identity papers or passwords, so agents may not open it unless the owner allows it " +
+                "in Miu Bridge, under Apps agents may open. Ask the owner to do this part, or to allow the app."
+        mode == Mode.BLOCK -> "The owner does not let agents open ${pkg ?: "that app"}. Ask the owner if it is needed."
+        else -> "The owner lets agents open only the apps they chose, and ${pkg ?: "the app for that link"} is not one of them. " +
             "phone_apps shows which apps are open to you; ask the owner if this one is needed."
     }
 
@@ -50,5 +59,6 @@ class AppPolicy(context: Context) {
         const val MODE = "app_policy_mode"
         const val BLOCKED = "blocked_apps"
         const val ALLOWED = "allowed_apps"
+        const val RISKY_ADDED = "risky_apps_added"
     }
 }

@@ -30,7 +30,8 @@ issue for a vulnerability. You will get an answer within a few days.
 - Once a day the app asks GitHub whether a newer release exists, to show a notice. The request says
   nothing about the phone, and the owner installs updates themselves.
 - Agents are told to hand payments, sign-ins and verifications to the owner. Which apps agents may open is the
-  owner's choice: every app except a block list (the default, empty), or only the apps on an allow list.
+  owner's choice: every app except a block list (the default), or only the apps on an allow list. Banking,
+  payment, broker, tax and password apps start on the block list; only the owner can take them off.
 
 A report that breaks one of these is exactly what we want to hear.
 

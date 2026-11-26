@@ -66,6 +66,8 @@ print(phone.snapshot())
   plain MCP connection is protected by HTTPS as far as the relay.
 - **The token is the key to your phone.** Give it only to agents you trust.
 - **You choose which apps agents may open:** every app except a block list, or only an allow list.
+  Banking, payment, broker, tax and password apps are on the block list from the start; you take one
+  off to let agents open it.
 - **Android 13 and later** work with the phone locked and the screen off. On Android 12 and earlier
   the phone has to be unlocked while an agent works.
 - Automating an app may break that app's terms. That is your call and your responsibility.

@@ -166,8 +166,9 @@
     <string name="apps_policy_title">Apps agents may open</string>
     <string name="apps_policy_mode_block">Block list</string>
     <string name="apps_policy_mode_allow">Allow list</string>
-    <string name="apps_policy_explain_block">Agents can open every app except the ones you tick. With nothing ticked, every app is open to them.</string>
+    <string name="apps_policy_explain_block">Agents can open every app except the ones you tick. Banks, payment, brokers, tax and password apps start ticked; untick one to let agents open it.</string>
     <string name="apps_policy_explain_allow">Agents can open only the apps you tick, and no others. With nothing ticked, they cannot open any app.</string>
+    <string name="apps_policy_risky">Closed by default: money, ID or passwords</string>
     <string name="apps_policy_all">All apps</string>
     <string name="apps_policy_blocked">Block list: %1$d apps closed to agents</string>
     <string name="apps_policy_allowed">Allow list: only %1$d apps</string>

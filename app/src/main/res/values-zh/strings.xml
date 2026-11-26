@@ -166,8 +166,9 @@
     <string name="apps_policy_title">agent 能打开哪些 App</string>
     <string name="apps_policy_mode_block">禁止列表</string>
     <string name="apps_policy_mode_allow">允许列表</string>
-    <string name="apps_policy_explain_block">agent 能打开所有 App，除了你勾选的。一个都不勾，就是全部都能打开。</string>
+    <string name="apps_policy_explain_block">agent 能打开所有 App，除了你勾选的。银行、支付、证券、报税和密码类 App 默认已勾选，你取消勾选后 agent 才能打开。</string>
     <string name="apps_policy_explain_allow">agent 只能打开你勾选的 App，其他一律打不开。一个都不勾，agent 就什么都打不开。</string>
+    <string name="apps_policy_risky">默认禁止：涉及钱、证件或密码</string>
     <string name="apps_policy_all">全部 App 都能打开</string>
     <string name="apps_policy_blocked">禁止列表：%1$d 个 App 不能打开</string>
     <string name="apps_policy_allowed">允许列表：只能打开 %1$d 个 App</string>

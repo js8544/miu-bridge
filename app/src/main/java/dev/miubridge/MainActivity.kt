@@ -103,6 +103,7 @@ import dev.miubridge.server.McpServer
 import dev.miubridge.server.RelayClient
 import dev.miubridge.server.Updates
 import dev.miubridge.phone.AppPolicy
+import dev.miubridge.phone.RiskyApps
 import dev.miubridge.ui.AppIcons
 import dev.miubridge.ui.MiuBridgeTheme
 import dev.miubridge.ui.LivePane
@@ -1048,11 +1049,15 @@ If you call the address with your own HTTP client, send a User-Agent header that
 
     /** One line saying what the owner's app rule lets agents do. */
     @Composable
-    private fun policySummary(mode: AppPolicy.Mode, blocked: Set<String>, allowed: Set<String>): String = when {
-        mode == AppPolicy.Mode.BLOCK && blocked.isEmpty() -> stringResource(R.string.apps_policy_all)
-        mode == AppPolicy.Mode.BLOCK -> stringResource(R.string.apps_policy_blocked, blocked.size)
-        allowed.isEmpty() -> stringResource(R.string.apps_policy_none)
-        else -> stringResource(R.string.apps_policy_allowed, allowed.size)
+    private fun policySummary(mode: AppPolicy.Mode, blocked: Set<String>, allowed: Set<String>, installed: Set<String>): String {
+        // The block list holds risky apps that may not be installed; count only the ones on this phone.
+        val closed = blocked.count { it in installed }
+        return when {
+            mode == AppPolicy.Mode.BLOCK && closed == 0 -> stringResource(R.string.apps_policy_all)
+            mode == AppPolicy.Mode.BLOCK -> stringResource(R.string.apps_policy_blocked, closed)
+            allowed.isEmpty() -> stringResource(R.string.apps_policy_none)
+            else -> stringResource(R.string.apps_policy_allowed, allowed.size)
+        }
     }
 
     /**
@@ -1109,6 +1114,9 @@ If you call the address with your own HTTP client, send a User-Agent header that
                                 Column {
                                     Text(label, style = MaterialTheme.typography.bodyMedium)
                                     Text(pkg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (m == AppPolicy.Mode.BLOCK && pkg in RiskyApps.PACKAGES) {
+                                        Text(stringResource(R.string.apps_policy_risky), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
                         }
@@ -1138,6 +1146,7 @@ If you call the address with your own HTTP client, send a User-Agent header that
         var policyBlocked by remember { mutableStateOf(app.phone.appPolicy.blocked) }
         var policyAllowed by remember { mutableStateOf(app.phone.appPolicy.allowed) }
         var policyDialog by remember { mutableStateOf(false) }
+        val installedApps = remember(policyDialog) { app.phone.launchableApps().map { it.second }.toSet() }
         fun setTracing(on: Boolean) {
             tracing = on
             app.traces.setEnabled(on)
@@ -1178,7 +1187,7 @@ If you call the address with your own HTTP client, send a User-Agent header that
             )
             ListItem(
                 headlineContent = { Text(stringResource(R.string.apps_policy_title)) },
-                supportingContent = { Text(policySummary(policyMode, policyBlocked, policyAllowed)) },
+                supportingContent = { Text(policySummary(policyMode, policyBlocked, policyAllowed, installedApps)) },
                 leadingContent = { Icon(AppIcons.Smartphone, null) },
                 trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
                 colors = clearItem(),
